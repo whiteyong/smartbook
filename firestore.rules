@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Household Ledger collections
+    match /accounts/{accountId} {
+      allow read, write: if isValidId(accountId);
+    }
+
+    match /transactions/{transactionId} {
+      allow read, write: if isValidId(transactionId);
+    }
+
+    match /rules/{ruleId} {
+      allow read, write: if isValidId(ruleId);
+    }
+
+    match /budgets/{budgetId} {
+      allow read, write: if isValidId(budgetId);
+    }
+
+    match /batches/{batchId} {
+      allow read, write: if isValidId(batchId);
+    }
+
+    match /settings/{settingId} {
+      allow read, write: if isValidId(settingId);
+    }
+
+    match /images/{imageId} {
+      allow read, write: if isValidId(imageId);
+    }
+
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
