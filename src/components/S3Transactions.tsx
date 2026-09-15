@@ -71,6 +71,8 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   // Rule registration is derived from persisted rules so it survives refreshes.
   const [isRuleRegistering, setIsRuleRegistering] = useState(false);
 
+  const activeTx = transactions.find((t) => t.id === activeTxId);
+
   const registeredRule = useMemo(() => {
     if (!activeTx) return undefined;
 
@@ -101,8 +103,6 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       return true;
     });
   }, [transactions, selectedAccId, selectedType, selectedCategory, onlyUnclassified, onlyNoReceipt, searchTerm]);
-
-  const activeTx = transactions.find((t) => t.id === activeTxId);
 
   // Batch Select Handlers
   const handleToggleSelect = (id: string) => {
