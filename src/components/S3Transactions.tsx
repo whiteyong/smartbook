@@ -17,7 +17,7 @@ import {
   Square,
   ArrowLeftRight,
 } from 'lucide-react';
-import { Account, Transaction, SplitItem } from '../types';
+import { Account, Transaction, SplitItem, ClassificationRule } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
 import { formatKRW, formatSignedKRW } from '../utils/formatters';
 import { CategorySelector } from './CategorySelector';
@@ -35,6 +35,8 @@ interface S3TransactionsProps {
   onUpdateTransaction: (id: string, updates: Partial<Transaction>) => Promise<void>;
   onDeleteTransaction: (id: string) => Promise<void>;
   onCreateRuleFromTransaction: (tx: Transaction, category: string) => Promise<void> | void;
+  rules: ClassificationRule[];
+  onDeleteRule: (id: string) => Promise<void>;
 }
 
 export const S3Transactions: React.FC<S3TransactionsProps> = ({
@@ -45,6 +47,8 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   onUpdateTransaction,
   onDeleteTransaction,
   onCreateRuleFromTransaction,
+  rules,
+  onDeleteRule,
 }) => {
   // Filter States
   const [selectedAccId, setSelectedAccId] = useState<string>(initialFilter?.accountId || 'all');
@@ -64,9 +68,20 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitDraft, setSplitDraft] = useState<SplitItem[]>([]);
 
-  // Rule Register State for Visual Feedback
+  // Rule registration is derived from persisted rules so it survives refreshes.
   const [isRuleRegistering, setIsRuleRegistering] = useState(false);
-  const [isRuleRegistered, setIsRuleRegistered] = useState(false);
+
+  const registeredRule = useMemo(() => {
+    if (!activeTx) return undefined;
+
+    return rules.find(
+      (rule) =>
+        rule.isActive &&
+        rule.condition.keyword === activeTx.counterparty &&
+        rule.condition.direction === activeTx.direction &&
+        rule.result.category === activeTx.category
+    );
+  }, [activeTx, rules]);
 
   // Filter logic
   const filteredTransactions = useMemo(() => {
@@ -406,9 +421,9 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
                     {/* Status */}
                     <div className="w-16 text-center">
-                      {tx.isManualLocked ? (
-                        <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-medium flex items-center justify-center gap-0.5">
-                          <Lock className="h-2.5 w-2.5" /> 수동
+                      {tx.isConfirmed || tx.isManualLocked ? (
+                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium flex items-center justify-center gap-0.5">
+                          <Lock className="h-2.5 w-2.5" /> 확정
                         </span>
                       ) : tx.isConfirmed ? (
                         <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
@@ -583,38 +598,48 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
               {/* Promote to Rule Button */}
               <div className="pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  disabled={isRuleRegistering || isRuleRegistered}
-                  onClick={async () => {
-                    if (isRuleRegistering || isRuleRegistered) return;
-                    setIsRuleRegistering(true);
-                    try {
-                      await onCreateRuleFromTransaction(activeTx, activeTx.category);
-                      setIsRuleRegistered(true);
-                      setTimeout(() => setIsRuleRegistered(false), 3000);
-                    } finally {
-                      setIsRuleRegistering(false);
-                    }
-                  }}
-                  className={`w-full flex items-center justify-center gap-2 py-2.5 px-3 text-xs font-bold rounded-xl transition shadow-2xs ${
-                    isRuleRegistered
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-300'
-                      : 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
-                  }`}
-                >
-                  {isRuleRegistered ? (
-                    <>
+                {registeredRule ? (
+                  <div className="w-full rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-xs font-bold text-emerald-700 shadow-2xs">
+                    <div className="flex items-center justify-center gap-2">
                       <Check className="h-4 w-4 text-emerald-600" />
                       <span>"{activeTx.counterparty}" 자동 분류 규칙 등록 완료!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
-                      <span>"앞으로 {activeTx.counterparty}는 항상 이 분류로" 규칙 등록</span>
-                    </>
-                  )}
-                </button>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isRuleRegistering}
+                      onClick={async (event) => {
+                        event.stopPropagation();
+                        setIsRuleRegistering(true);
+                        try {
+                          await onDeleteRule(registeredRule.id);
+                        } finally {
+                          setIsRuleRegistering(false);
+                        }
+                      }}
+                      className="mt-1 block mx-auto text-[10px] font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900 disabled:opacity-50"
+                    >
+                      규칙 등록 해제
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isRuleRegistering}
+                    onClick={async () => {
+                      if (isRuleRegistering) return;
+                      setIsRuleRegistering(true);
+                      try {
+                        await onCreateRuleFromTransaction(activeTx, activeTx.category);
+                      } finally {
+                        setIsRuleRegistering(false);
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-3 text-xs font-bold rounded-xl transition shadow-2xs bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+                    <span>"앞으로 {activeTx.counterparty}는 항상 이 분류로" 규칙 등록</span>
+                  </button>
+                )}
               </div>
 
               {/* Delete Button */}

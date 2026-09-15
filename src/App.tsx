@@ -309,6 +309,11 @@ export default function App() {
               onUpdateTransaction={handleUpdateTransaction}
               onDeleteTransaction={handleDeleteTransaction}
               onCreateRuleFromTransaction={handleCreateRuleFromTransaction}
+              rules={rules}
+              onDeleteRule={async (id) => {
+                await deleteRule(id);
+                setRules((prev) => prev.filter((rule) => rule.id !== id));
+              }}
             />
           )}
 
