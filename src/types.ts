@@ -34,6 +34,14 @@ export interface PayslipItem {
   amount: number;
 }
 
+export interface TransactionAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+  createdAt: string;
+}
+
 export interface Transaction {
   id: string;
   accountId: string;
@@ -55,6 +63,7 @@ export interface Transaction {
   transferPairId?: string; // 이체 매칭 상대 거래 ID
   transferAccountAlias?: string; // 이체 상대 계좌명
   receiptUrl?: string; // 영수증 증빙 이미지 경로 또는 dataUri
+  attachments?: TransactionAttachment[]; // 거래별 증빙 첨부파일
   splits?: SplitItem[]; // 분할 거래
   payslip?: PayslipItem[]; // 급여 분해 항목
   importBatchId?: string;
