@@ -11,13 +11,17 @@ import {
   X,
   Plus,
   Trash2,
-  Lock,
   Unlock,
   CheckSquare,
   Square,
   ArrowLeftRight,
+  Upload,
+  Eye,
+  Download,
+  Edit3,
+  FileText,
 } from 'lucide-react';
-import { Account, Transaction, SplitItem, ClassificationRule } from '../types';
+import { Account, Transaction, TransactionAttachment, SplitItem, ClassificationRule } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
 import { formatKRW, formatSignedKRW } from '../utils/formatters';
 import { CategorySelector } from './CategorySelector';
@@ -67,6 +71,10 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   // Split Modal State
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
   const [splitDraft, setSplitDraft] = useState<SplitItem[]>([]);
+  const [previewAttachment, setPreviewAttachment] = useState<TransactionAttachment | null>(null);
+  const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
+  const [editingAttachmentName, setEditingAttachmentName] = useState('');
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Rule registration is derived from persisted rules so it survives refreshes.
   const [isRuleRegistering, setIsRuleRegistering] = useState(false);
@@ -174,6 +182,56 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   };
 
   // Inter-account transfer disconnect
+  const handleAttachmentUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!activeTx || !event.target.files) return;
+    const files = Array.from(event.target.files);
+    const validFiles = files.filter((file) => /^(image\/(png|jpeg)|application\/pdf)$/.test(file.type));
+    if (validFiles.length !== files.length) alert('PNG, JPG, JPEG, PDF 파일만 업로드할 수 있습니다.');
+    const oversized = validFiles.find((file) => file.size > 5 * 1024 * 1024);
+    if (oversized) {
+      alert('파일 하나당 최대 5MB까지 업로드할 수 있습니다.');
+      event.target.value = '';
+      return;
+    }
+    const uploaded = await Promise.all(validFiles.map((file) => new Promise<TransactionAttachment>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({
+        id: `attachment_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        mimeType: file.type,
+        dataUrl: String(reader.result),
+        createdAt: new Date().toISOString(),
+      });
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    })));
+    if (uploaded.length) {
+      await onUpdateTransaction(activeTx.id, { attachments: [...(activeTx.attachments || []), ...uploaded] });
+    }
+    event.target.value = '';
+  };
+
+  const saveAttachmentName = async (attachment: TransactionAttachment) => {
+    if (!activeTx || !editingAttachmentName.trim()) return;
+    const originalExtension = attachment.name.includes('.') ? attachment.name.slice(attachment.name.lastIndexOf('.')) : '';
+    const typedBase = editingAttachmentName.trim().replace(/\.[^.]+$/, '');
+    const nextName = `${typedBase || '첨부파일'}${originalExtension}`;
+    await onUpdateTransaction(activeTx.id, {
+      attachments: (activeTx.attachments || []).map((item) => item.id === attachment.id ? { ...item, name: nextName } : item),
+    });
+    setEditingAttachmentId(null);
+    setEditingAttachmentName('');
+  };
+
+  const downloadAttachment = (attachment: TransactionAttachment) => {
+    const link = document.createElement('a');
+    link.href = attachment.dataUrl;
+    link.download = attachment.name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   const handleDisconnectTransfer = async () => {
     if (!activeTx || !activeTx.transferPairId) return;
     const pairId = activeTx.transferPairId;
@@ -410,7 +468,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
                     {/* Receipt */}
                     <div className="w-16 text-center">
-                      {tx.receiptUrl ? (
+                      {tx.receiptUrl || tx.attachments?.length ? (
                         <span className="text-emerald-600 text-[11px] font-semibold flex items-center justify-center gap-0.5">
                           <Receipt className="h-3.5 w-3.5" /> 첨부
                         </span>
@@ -421,13 +479,13 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
                     {/* Status */}
                     <div className="w-16 text-center">
-                      {tx.isConfirmed || tx.isManualLocked ? (
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium flex items-center justify-center gap-0.5">
-                          <Lock className="h-2.5 w-2.5" /> 확정
-                        </span>
-                      ) : tx.isConfirmed ? (
+                      {tx.isConfirmed ? (
                         <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
                           확정
+                        </span>
+                      ) : tx.isManualLocked ? (
+                        <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-medium">
+                          수동
                         </span>
                       ) : (
                         <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-bold">
@@ -596,32 +654,46 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                 />
               </div>
 
-              {/* Promote to Rule Button */}
-              <div className="pt-2 border-t border-slate-100">
-                {registeredRule ? (
-                  <div className="w-full rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-xs font-bold text-emerald-700 shadow-2xs">
-                    <div className="flex items-center justify-center gap-2">
-                      <Check className="h-4 w-4 text-emerald-600" />
-                      <span>"{activeTx.counterparty}" 자동 분류 규칙 등록 완료!</span>
+              {/* Attachments */}
+              <div className="border-t border-slate-100 pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-slate-700">증빙 첨부파일</label>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                  >
+                    <Upload className="h-3 w-3" /> 파일 추가
+                  </button>
+                  <input ref={fileInputRef} type="file" accept=".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf" multiple onChange={handleAttachmentUpload} className="hidden" />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {(activeTx.attachments || []).length === 0 ? (
+                    <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-400">등록된 첨부파일이 없습니다.</p>
+                  ) : (activeTx.attachments || []).map((attachment) => (
+                    <div key={attachment.id} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                      {editingAttachmentId === attachment.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <input autoFocus value={editingAttachmentName} onChange={(event) => setEditingAttachmentName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveAttachmentName(attachment); if (event.key === 'Escape') setEditingAttachmentId(null); }} className="min-w-0 flex-1 rounded border border-indigo-300 px-1.5 py-1 text-[11px] outline-none" />
+                          <button type="button" onClick={() => saveAttachmentName(attachment)} className="text-[11px] font-semibold text-indigo-600">저장</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-700" title={attachment.name}>{attachment.name}</span>
+                          <button type="button" aria-label={`${attachment.name} 미리보기`} title="미리보기" onClick={() => setPreviewAttachment(attachment)} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"><Eye className="h-3.5 w-3.5" /></button>
+                          <button type="button" aria-label={`${attachment.name} 다운로드`} title="다운로드" onClick={() => downloadAttachment(attachment)} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"><Download className="h-3.5 w-3.5" /></button>
+                          <button type="button" aria-label={`${attachment.name} 이름 수정`} title="이름 수정" onClick={() => { setEditingAttachmentId(attachment.id); setEditingAttachmentName(attachment.name.replace(/\.[^.]+$/, '')); }} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"><Edit3 className="h-3.5 w-3.5" /></button>
+                        </div>
+                      )}
                     </div>
-                    <button
-                      type="button"
-                      disabled={isRuleRegistering}
-                      onClick={async (event) => {
-                        event.stopPropagation();
-                        setIsRuleRegistering(true);
-                        try {
-                          await onDeleteRule(registeredRule.id);
-                        } finally {
-                          setIsRuleRegistering(false);
-                        }
-                      }}
-                      className="mt-1 block mx-auto text-[10px] font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900 disabled:opacity-50"
-                    >
-                      규칙 등록 해제
-                    </button>
-                  </div>
-                ) : (
+                  ))}
+                </div>
+              </div>
+
+              {/* Promote to Rule Button */}
+              {!registeredRule && (
+                <div className="pt-2 border-t border-slate-100">
                   <button
                     type="button"
                     disabled={isRuleRegistering}
@@ -639,11 +711,11 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                     <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
                     <span>"앞으로 {activeTx.counterparty}는 항상 이 분류로" 규칙 등록</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
-              {/* Delete Button */}
-              <div>
+              {/* Delete and rule removal actions */}
+              <div className="space-y-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -656,6 +728,29 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                   <Trash2 className="h-3 w-3" />
                   <span>거래 내역 삭제</span>
                 </button>
+                {registeredRule && (
+                  <button
+                    type="button"
+                    disabled={isRuleRegistering}
+                    onClick={async (event) => {
+                      event.stopPropagation();
+                      setIsRuleRegistering(true);
+                      try {
+                        await onDeleteRule(registeredRule.id);
+                        await onUpdateTransaction(activeTx.id, {
+                          isConfirmed: false,
+                          isManualLocked: true,
+                        });
+                      } finally {
+                        setIsRuleRegistering(false);
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700 rounded-lg transition disabled:opacity-50"
+                  >
+                    <Unlock className="h-3 w-3" />
+                    <span>규칙 등록 해제</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -665,6 +760,25 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           )}
         </div>
       </div>
+
+      {/* Attachment Preview Modal */}
+      {previewAttachment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4" role="dialog" aria-modal="true" aria-label={`${previewAttachment.name} 미리보기`} onClick={() => setPreviewAttachment(null)}>
+          <div className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-3">
+              <h3 className="min-w-0 truncate text-sm font-bold text-slate-900">{previewAttachment.name}</h3>
+              <button type="button" aria-label="미리보기 닫기" onClick={() => setPreviewAttachment(null)} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="flex min-h-[320px] max-w-[calc(100vw-2rem)] items-center justify-center overflow-auto bg-slate-100 p-4">
+              {previewAttachment.mimeType === 'application/pdf' ? (
+                <iframe src={previewAttachment.dataUrl} title={previewAttachment.name} className="h-[70vh] w-[min(80vw,900px)] rounded border-0 bg-white" />
+              ) : (
+                <img src={previewAttachment.dataUrl} alt={previewAttachment.name} className="max-h-[70vh] max-w-full object-contain" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Split Transaction Modal */}
       {isSplitModalOpen && activeTx && (
