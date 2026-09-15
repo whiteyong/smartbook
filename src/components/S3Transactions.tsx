@@ -11,7 +11,6 @@ import {
   X,
   Plus,
   Trash2,
-  Lock,
   Unlock,
   CheckSquare,
   Square,
@@ -421,13 +420,13 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
                     {/* Status */}
                     <div className="w-16 text-center">
-                      {tx.isConfirmed || tx.isManualLocked ? (
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium flex items-center justify-center gap-0.5">
-                          <Lock className="h-2.5 w-2.5" /> 확정
-                        </span>
-                      ) : tx.isConfirmed ? (
+                      {tx.isConfirmed ? (
                         <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
                           확정
+                        </span>
+                      ) : tx.isManualLocked ? (
+                        <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-medium">
+                          수동
                         </span>
                       ) : (
                         <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-bold">
@@ -597,31 +596,8 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
               </div>
 
               {/* Promote to Rule Button */}
-              <div className="pt-2 border-t border-slate-100">
-                {registeredRule ? (
-                  <div className="w-full rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-xs font-bold text-emerald-700 shadow-2xs">
-                    <div className="flex items-center justify-center gap-2">
-                      <Check className="h-4 w-4 text-emerald-600" />
-                      <span>"{activeTx.counterparty}" 자동 분류 규칙 등록 완료!</span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={isRuleRegistering}
-                      onClick={async (event) => {
-                        event.stopPropagation();
-                        setIsRuleRegistering(true);
-                        try {
-                          await onDeleteRule(registeredRule.id);
-                        } finally {
-                          setIsRuleRegistering(false);
-                        }
-                      }}
-                      className="mt-1 block mx-auto text-[10px] font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900 disabled:opacity-50"
-                    >
-                      규칙 등록 해제
-                    </button>
-                  </div>
-                ) : (
+              {!registeredRule && (
+                <div className="pt-2 border-t border-slate-100">
                   <button
                     type="button"
                     disabled={isRuleRegistering}
@@ -639,11 +615,11 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                     <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
                     <span>"앞으로 {activeTx.counterparty}는 항상 이 분류로" 규칙 등록</span>
                   </button>
-                )}
-              </div>
+                </div>
+              )}
 
-              {/* Delete Button */}
-              <div>
+              {/* Delete and rule removal actions */}
+              <div className="space-y-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -656,6 +632,29 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                   <Trash2 className="h-3 w-3" />
                   <span>거래 내역 삭제</span>
                 </button>
+                {registeredRule && (
+                  <button
+                    type="button"
+                    disabled={isRuleRegistering}
+                    onClick={async (event) => {
+                      event.stopPropagation();
+                      setIsRuleRegistering(true);
+                      try {
+                        await onDeleteRule(registeredRule.id);
+                        await onUpdateTransaction(activeTx.id, {
+                          isConfirmed: false,
+                          isManualLocked: true,
+                        });
+                      } finally {
+                        setIsRuleRegistering(false);
+                      }
+                    }}
+                    className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-700 rounded-lg transition disabled:opacity-50"
+                  >
+                    <Unlock className="h-3 w-3" />
+                    <span>규칙 등록 해제</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (

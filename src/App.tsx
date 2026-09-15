@@ -174,7 +174,7 @@ export default function App() {
             category,
             type: resolvedType,
             isConfirmed: true,
-            isManualLocked: true,
+            isManualLocked: false,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -202,7 +202,7 @@ export default function App() {
       category,
       type: resolvedType,
       isConfirmed: true,
-      isManualLocked: true,
+      isManualLocked: false,
     });
   };
 
