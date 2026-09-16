@@ -25,6 +25,10 @@ import {
   ArrowUp,
   ArrowDown,
   CornerDownLeft,
+  Wallet,
+  Layers,
+  GripVertical,
+  RotateCcw,
 } from 'lucide-react';
 import { Account, Transaction, TransactionAttachment, SplitItem, ClassificationRule, PayslipItem } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
@@ -90,6 +94,13 @@ const findTransferCandidates = (
 const isTxInDepth1Category = (txCategory: string, selectedDepth1: string): boolean => {
   if (!selectedDepth1 || selectedDepth1 === 'all') return true;
 
+  if (selectedDepth1 === '수입') {
+    return txCategory.startsWith('수입');
+  }
+  if (selectedDepth1 === '이체/기타') {
+    return txCategory.startsWith('이체') || txCategory === '미분류';
+  }
+
   const group = CATEGORY_TREE.find((g) => g.group === selectedDepth1);
   if (!group) {
     return txCategory.startsWith(selectedDepth1) || txCategory === selectedDepth1;
@@ -109,6 +120,37 @@ const isTxInDepth1Category = (txCategory: string, selectedDepth1: string): boole
   const keywords = group.group.split('/');
   return keywords.some((k) => txCategory.includes(k));
 };
+
+export interface ColumnMeta {
+  id: 'date' | 'account' | 'description' | 'amount' | 'category' | 'tags' | 'receipt' | 'status';
+  label: string;
+  headerAlignClass: string;
+}
+
+export const DEFAULT_COLUMNS: ColumnMeta[] = [
+  { id: 'date', label: '날짜', headerAlignClass: 'justify-center text-center' },
+  { id: 'account', label: '통장', headerAlignClass: 'justify-center text-center' },
+  { id: 'description', label: '거래처 / 적요 원문', headerAlignClass: 'justify-center text-center' },
+  { id: 'amount', label: '금액(원)', headerAlignClass: 'justify-center text-center' },
+  { id: 'category', label: '카테고리', headerAlignClass: 'justify-center text-center' },
+  { id: 'tags', label: '태그', headerAlignClass: 'justify-center text-center' },
+  { id: 'receipt', label: '증빙', headerAlignClass: 'justify-center text-center' },
+  { id: 'status', label: '상태', headerAlignClass: 'justify-center text-center' },
+];
+
+export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  date: 95,
+  account: 110,
+  description: 250,
+  amount: 115,
+  category: 120,
+  tags: 150,
+  receipt: 65,
+  status: 75,
+};
+
+const STORAGE_KEY_COL_ORDER = 's3_tx_column_order';
+const STORAGE_KEY_COL_WIDTHS = 's3_tx_column_widths';
 
 export const S3Transactions: React.FC<S3TransactionsProps> = ({
   transactions,
@@ -203,10 +245,248 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const [tagInputVal, setTagInputVal] = useState<string>('');
   const tagPopoverRef = useRef<HTMLDivElement | null>(null);
 
-  // 상단 카테고리 1depth 선택 레이어 상태
+  // 상단 필터 레이어 상태 (계좌, 유형, 카테고리)
+  const [isAccountLayerOpen, setIsAccountLayerOpen] = useState(false);
+  const accountLayerRef = useRef<HTMLDivElement | null>(null);
+  const accountBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const [isTypeLayerOpen, setIsTypeLayerOpen] = useState(false);
+  const typeLayerRef = useRef<HTMLDivElement | null>(null);
+  const typeBtnRef = useRef<HTMLButtonElement | null>(null);
+
   const [isCategoryLayerOpen, setIsCategoryLayerOpen] = useState(false);
   const categoryLayerRef = useRef<HTMLDivElement | null>(null);
   const categoryBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const TYPE_OPTIONS = useMemo(
+    () => [
+      { value: 'all', label: '전체 유형', color: 'bg-slate-300' },
+      { value: 'expense', label: '지출', color: 'bg-rose-500' },
+      { value: 'income', label: '수입', color: 'bg-emerald-500' },
+      { value: 'transfer', label: '이체 (통장간)', color: 'bg-sky-500' },
+      { value: 'savings', label: '저축/적금', color: 'bg-amber-500' },
+    ],
+    []
+  );
+
+  const selectedAccountLabel = useMemo(() => {
+    if (selectedAccId === 'all') return '전체 계좌';
+    const acc = accounts.find((a) => a.id === selectedAccId);
+    return acc ? acc.alias : '전체 계좌';
+  }, [selectedAccId, accounts]);
+
+  const selectedTypeLabel = useMemo(() => {
+    const found = TYPE_OPTIONS.find((t) => t.value === selectedType);
+    return found ? found.label : '전체 유형';
+  }, [selectedType, TYPE_OPTIONS]);
+
+  // 컬럼 정렬 상태 (컬럼 ID, 'none' | 'asc' | 'desc')
+  const [sortField, setSortField] = useState<string | null>(null);
+  const [sortDirection, setSortDirection] = useState<'none' | 'asc' | 'desc'>('none');
+
+  // 컬럼 순서 및 localStorage 영속화
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_COL_ORDER);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length === DEFAULT_COLUMNS.length) {
+          const allMatch = DEFAULT_COLUMNS.every((c) => parsed.includes(c.id));
+          if (allMatch) return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_COLUMNS.map((c) => c.id);
+  });
+
+  // 컬럼 너비 상태 및 localStorage 영속화
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_COL_WIDTHS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...DEFAULT_COLUMN_WIDTHS, ...parsed };
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return { ...DEFAULT_COLUMN_WIDTHS };
+  });
+
+  // 드래그 앤 드롭 상태
+  const [draggedColId, setDraggedColId] = useState<string | null>(null);
+  const [dragOverColId, setDragOverColId] = useState<string | null>(null);
+  const justDraggedRef = useRef<boolean>(false);
+
+  // 컬럼 리사이즈 상태
+  const isResizingRef = useRef<boolean>(false);
+  const [resizingColId, setResizingColId] = useState<string | null>(null);
+
+  // 컬럼 너비 또는 순서가 기본값과 다른지 여부
+  const isCustomColumnConfig = useMemo(() => {
+    const isCustomOrder = columnOrder.some((colId, idx) => colId !== DEFAULT_COLUMNS[idx].id);
+    const isCustomWidth = Object.keys(DEFAULT_COLUMN_WIDTHS).some(
+      (key) => columnWidths[key] !== undefined && columnWidths[key] !== DEFAULT_COLUMN_WIDTHS[key]
+    );
+    return isCustomOrder || isCustomWidth;
+  }, [columnOrder, columnWidths]);
+
+  // 테이블 전체 최소 너비 (체크박스 40px + 각 컬럼 최소/설정 폭 합계)
+  const minTableWidth = useMemo(() => {
+    const checkboxWidth = 40;
+    const sum = columnOrder.reduce((acc, colId) => {
+      return acc + (columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100);
+    }, 0);
+    return checkboxWidth + sum;
+  }, [columnOrder, columnWidths]);
+
+  // 헤더와 바디 행이 100% 동일하게 공유하는 CSS Grid 템플릿
+  const gridTemplateColumns = useMemo(() => {
+    const checkboxCol = '40px';
+    const tracks = columnOrder.map((colId) => {
+      const w = columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100;
+      if (colId === 'description') {
+        return `minmax(${w}px, 1fr)`;
+      }
+      return `${w}px`;
+    });
+    return `${checkboxCol} ${tracks.join(' ')}`;
+  }, [columnOrder, columnWidths]);
+
+  // 컬럼 리사이즈 마우스 드래그 핸들러
+  const handleResizeStart = (e: React.MouseEvent, colId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isResizingRef.current = true;
+    setResizingColId(colId);
+
+    const startX = e.clientX;
+    const initialWidth = columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      const delta = moveEvent.clientX - startX;
+      const minWidth = colId === 'receipt' || colId === 'status' ? 45 : colId === 'date' ? 70 : 75;
+      const newWidth = Math.max(minWidth, Math.round(initialWidth + delta));
+      setColumnWidths((prev) => ({
+        ...prev,
+        [colId]: newWidth,
+      }));
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      setResizingColId(null);
+      setTimeout(() => {
+        isResizingRef.current = false;
+      }, 80);
+
+      setColumnWidths((latest) => {
+        try {
+          localStorage.setItem(STORAGE_KEY_COL_WIDTHS, JSON.stringify(latest));
+        } catch {
+          // ignore
+        }
+        return latest;
+      });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // 컬럼 정렬 토글 (none -> asc -> desc -> none)
+  const handleToggleSort = (colId: string) => {
+    if (sortField !== colId) {
+      setSortField(colId);
+      setSortDirection('asc');
+    } else {
+      if (sortDirection === 'asc') {
+        setSortDirection('desc');
+      } else if (sortDirection === 'desc') {
+        setSortField(null);
+        setSortDirection('none');
+      } else {
+        setSortDirection('asc');
+      }
+    }
+  };
+
+  // 컬럼 드래그 앤 드롭 핸들러
+  const handleDragStart = (e: React.DragEvent, colId: string) => {
+    setDraggedColId(colId);
+    e.dataTransfer.setData('text/plain', colId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, colId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverColId !== colId) {
+      setDragOverColId(colId);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent, colId: string) => {
+    if (dragOverColId === colId) {
+      setDragOverColId(null);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetColId: string) => {
+    e.preventDefault();
+    const sourceColId = e.dataTransfer.getData('text/plain') || draggedColId;
+    if (sourceColId && sourceColId !== targetColId) {
+      setColumnOrder((prev) => {
+        const next = [...prev];
+        const sourceIdx = next.indexOf(sourceColId);
+        const targetIdx = next.indexOf(targetColId);
+        if (sourceIdx !== -1 && targetIdx !== -1) {
+          next.splice(sourceIdx, 1);
+          next.splice(targetIdx, 0, sourceColId);
+          try {
+            localStorage.setItem(STORAGE_KEY_COL_ORDER, JSON.stringify(next));
+          } catch {
+            // ignore
+          }
+        }
+        return next;
+      });
+    }
+    setDraggedColId(null);
+    setDragOverColId(null);
+    justDraggedRef.current = true;
+    setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 100);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedColId(null);
+    setDragOverColId(null);
+    justDraggedRef.current = true;
+    setTimeout(() => {
+      justDraggedRef.current = false;
+    }, 100);
+  };
+
+  // 컬럼 순서 및 너비 기본값 복원
+  const handleResetColumnConfig = () => {
+    const defaultOrder = DEFAULT_COLUMNS.map((c) => c.id);
+    setColumnOrder(defaultOrder);
+    setColumnWidths({ ...DEFAULT_COLUMN_WIDTHS });
+    try {
+      localStorage.removeItem(STORAGE_KEY_COL_ORDER);
+      localStorage.removeItem(STORAGE_KEY_COL_WIDTHS);
+    } catch {
+      // ignore
+    }
+  };
 
   // 일괄 태그 추가 상태
   const [isBatchTagOpen, setIsBatchTagOpen] = useState(false);
@@ -227,6 +507,34 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     return Array.from(set);
   }, [transactions, deletedGlobalTags]);
 
+  // 계좌별 거래 건수 집계
+  const accountCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: transactions.length,
+    };
+    accounts.forEach((a) => {
+      counts[a.id] = transactions.filter((t) => t.accountId === a.id).length;
+    });
+    return counts;
+  }, [transactions, accounts]);
+
+  // 유형별 거래 건수 집계
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: transactions.length,
+      expense: 0,
+      income: 0,
+      transfer: 0,
+      savings: 0,
+    };
+    transactions.forEach((t) => {
+      if (counts[t.type] !== undefined) {
+        counts[t.type]++;
+      }
+    });
+    return counts;
+  }, [transactions]);
+
   // 1depth 카테고리별 거래 내역 건수 집계
   const depth1Counts = useMemo(() => {
     const counts: Record<string, number> = {
@@ -238,21 +546,45 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     return counts;
   }, [transactions]);
 
-  // 카테고리 1depth 레이어 외부 클릭 및 ESC 닫기
+  // 상단 필터 레이어들(계좌, 유형, 카테고리) 외부 클릭 및 ESC 닫기
   useEffect(() => {
-    if (!isCategoryLayerOpen) return;
+    if (!isAccountLayerOpen && !isTypeLayerOpen && !isCategoryLayerOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
       if (
+        isAccountLayerOpen &&
+        accountLayerRef.current &&
+        !accountLayerRef.current.contains(target) &&
+        accountBtnRef.current &&
+        !accountBtnRef.current.contains(target)
+      ) {
+        setIsAccountLayerOpen(false);
+      }
+      if (
+        isTypeLayerOpen &&
+        typeLayerRef.current &&
+        !typeLayerRef.current.contains(target) &&
+        typeBtnRef.current &&
+        !typeBtnRef.current.contains(target)
+      ) {
+        setIsTypeLayerOpen(false);
+      }
+      if (
+        isCategoryLayerOpen &&
         categoryLayerRef.current &&
-        !categoryLayerRef.current.contains(e.target as Node) &&
+        !categoryLayerRef.current.contains(target) &&
         categoryBtnRef.current &&
-        !categoryBtnRef.current.contains(e.target as Node)
+        !categoryBtnRef.current.contains(target)
       ) {
         setIsCategoryLayerOpen(false);
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsCategoryLayerOpen(false);
+      if (e.key === 'Escape') {
+        setIsAccountLayerOpen(false);
+        setIsTypeLayerOpen(false);
+        setIsCategoryLayerOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
@@ -260,7 +592,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isCategoryLayerOpen]);
+  }, [isAccountLayerOpen, isTypeLayerOpen, isCategoryLayerOpen]);
 
   // 태그 팝오버 외부 클릭 및 ESC 닫기
   useEffect(() => {
@@ -421,7 +753,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     return transactions.filter((t) => {
       if (selectedAccId !== 'all' && t.accountId !== selectedAccId) return false;
       if (selectedType !== 'all' && t.type !== selectedType) return false;
-      if (selectedCategory !== 'all' && !t.category.startsWith(selectedCategory)) return false;
+      if (selectedCategory !== 'all' && !isTxInDepth1Category(t.category, selectedCategory)) return false;
       if (onlyUnclassified && !isNeedsAttention(t)) return false;
       if (onlyNoReceipt && (t.type !== 'expense' || hasProofReceipt(t))) return false;
 
@@ -434,6 +766,70 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       return true;
     });
   }, [transactions, selectedAccId, selectedType, selectedCategory, onlyUnclassified, onlyNoReceipt, searchTerm, hasProofReceipt, isNeedsAttention]);
+
+  // Sorting logic (컬럼 정렬: 오름차순, 내림차순, 기본/정렬없음)
+  const sortedTransactions = useMemo(() => {
+    if (!sortField || sortDirection === 'none') {
+      return filteredTransactions;
+    }
+
+    return [...filteredTransactions].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'date':
+          cmp = (a.occurredAt || '').localeCompare(b.occurredAt || '');
+          break;
+        case 'account':
+          cmp = (a.accountAlias || '').localeCompare(b.accountAlias || '', 'ko');
+          break;
+        case 'description': {
+          const descA = a.counterparty || a.rawDescription || '';
+          const descB = b.counterparty || b.rawDescription || '';
+          cmp = descA.localeCompare(descB, 'ko');
+          break;
+        }
+        case 'amount': {
+          const valA = a.direction === 'in' ? a.amount : -a.amount;
+          const valB = b.direction === 'in' ? b.amount : -b.amount;
+          cmp = valA - valB;
+          break;
+        }
+        case 'category':
+          cmp = (a.category || '').localeCompare(b.category || '', 'ko');
+          break;
+        case 'tags': {
+          const tagA = (a.tags && a.tags[0]) || '';
+          const tagB = (b.tags && b.tags[0]) || '';
+          cmp = tagA.localeCompare(tagB, 'ko');
+          break;
+        }
+        case 'receipt': {
+          const rA = hasProofReceipt(a) ? 1 : 0;
+          const rB = hasProofReceipt(b) ? 1 : 0;
+          cmp = rA - rB;
+          break;
+        }
+        case 'status': {
+          const statusRank = (tx: Transaction) => {
+            const isTransfer = tx.type === 'transfer' || tx.category.startsWith('이체');
+            const isLinked = isTransfer && Boolean(tx.transfer_link_id || tx.transferPairId);
+            const isUnlinked = isTransfer && !isLinked && !tx.transfer_unlinked_allowed;
+            if (isUnlinked) return 0;
+            if (isLinked) return 1;
+            if (!tx.isConfirmed) return 2;
+            if (tx.isManualLocked) return 3;
+            return 4;
+          };
+          cmp = statusRank(a) - statusRank(b);
+          break;
+        }
+        default:
+          cmp = 0;
+      }
+
+      return sortDirection === 'asc' ? cmp : -cmp;
+    });
+  }, [filteredTransactions, sortField, sortDirection, hasProofReceipt]);
 
   // Unclassified & Needs Attention transactions count
   const unclassifiedTxs = useMemo(() => {
@@ -452,10 +848,10 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   };
 
   const handleSelectAll = () => {
-    if (selectedIds.size === filteredTransactions.length) {
+    if (selectedIds.size === sortedTransactions.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredTransactions.map((t) => t.id)));
+      setSelectedIds(new Set(sortedTransactions.map((t) => t.id)));
     }
   };
 
@@ -519,7 +915,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       return;
     }
 
-    const currentIdx = filteredTransactions.findIndex((t) => t.id === activeTx.id);
+    const currentIdx = sortedTransactions.findIndex((t) => t.id === activeTx.id);
 
     // Confirm active transaction
     await onUpdateTransaction(activeTx.id, {
@@ -527,16 +923,16 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       isManualLocked: true,
     });
 
-    // Find next unclassified or next transaction in filtered list
-    const nextUnclassified = filteredTransactions
+    // Find next unclassified or next transaction in sorted list
+    const nextUnclassified = sortedTransactions
       .slice(currentIdx + 1)
       .find(isNeedsAttention);
     if (nextUnclassified) {
       setActiveTxId(nextUnclassified.id);
       const el = document.getElementById(`tx-row-${nextUnclassified.id}`);
       el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    } else if (currentIdx < filteredTransactions.length - 1) {
-      const nextTx = filteredTransactions[currentIdx + 1];
+    } else if (currentIdx < sortedTransactions.length - 1) {
+      const nextTx = sortedTransactions[currentIdx + 1];
       setActiveTxId(nextTx.id);
       const el = document.getElementById(`tx-row-${nextTx.id}`);
       el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -564,18 +960,18 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const currentIdx = filteredTransactions.findIndex((t) => t.id === activeTxId);
-        if (currentIdx < filteredTransactions.length - 1) {
-          const nextTx = filteredTransactions[currentIdx + 1];
+        const currentIdx = sortedTransactions.findIndex((t) => t.id === activeTxId);
+        if (currentIdx < sortedTransactions.length - 1) {
+          const nextTx = sortedTransactions[currentIdx + 1];
           setActiveTxId(nextTx.id);
           const el = document.getElementById(`tx-row-${nextTx.id}`);
           el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        const currentIdx = filteredTransactions.findIndex((t) => t.id === activeTxId);
+        const currentIdx = sortedTransactions.findIndex((t) => t.id === activeTxId);
         if (currentIdx > 0) {
-          const prevTx = filteredTransactions[currentIdx - 1];
+          const prevTx = sortedTransactions[currentIdx - 1];
           setActiveTxId(prevTx.id);
           const el = document.getElementById(`tx-row-${prevTx.id}`);
           el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -596,7 +992,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTxId, filteredTransactions, isSplitModalOpen, isPayslipModalOpen, activeTx, onUpdateTransaction]);
+  }, [activeTxId, sortedTransactions, isSplitModalOpen, isPayslipModalOpen, activeTx, onUpdateTransaction]);
 
   // Reset payslip & transfer candidate states and sync memoDraft when active transaction changes
   useEffect(() => {
@@ -1327,50 +1723,362 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
             <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           </div>
 
-          {/* Account Filter */}
-          <select
-            value={selectedAccId}
-            onChange={(e) => setSelectedAccId(e.target.value)}
-            className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
-          >
-            <option value="all">전체 계좌</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.alias}
-              </option>
-            ))}
-          </select>
+          {/* Account Filter Layer */}
+          <div className="relative">
+            <button
+              id="account-filter-layer-btn"
+              ref={accountBtnRef}
+              type="button"
+              onClick={() => {
+                setIsAccountLayerOpen((prev) => !prev);
+                setIsTypeLayerOpen(false);
+                setIsCategoryLayerOpen(false);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition outline-none cursor-pointer ${
+                selectedAccId !== 'all'
+                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
+                  : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+              }`}
+              title="계좌 선택 레이어 열기"
+            >
+              <Wallet className={`h-3.5 w-3.5 ${selectedAccId !== 'all' ? 'text-indigo-600' : 'text-slate-400'}`} />
+              <span className="max-w-[120px] truncate">{selectedAccountLabel}</span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                  isAccountLayerOpen ? 'rotate-180 text-indigo-600' : 'text-slate-400'
+                }`}
+              />
+            </button>
 
-          {/* Type Filter */}
-          <select
-            value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
-            className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
-          >
-            <option value="all">전체 유형</option>
-            <option value="expense">지출만</option>
-            <option value="income">수입만</option>
-            <option value="transfer">이체만 (통장간)</option>
-            <option value="savings">저축/적금만</option>
-          </select>
+            {/* Account Popover */}
+            {isAccountLayerOpen && (
+              <div
+                id="account-filter-layer-popover"
+                ref={accountLayerRef}
+                className="absolute left-0 top-full mt-1.5 w-64 bg-white rounded-xl shadow-xl border border-slate-200 z-50 p-2 animate-in fade-in zoom-in-95 duration-100"
+              >
+                <div className="flex items-center justify-between px-2.5 py-1.5 mb-1 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                    <Wallet className="h-3.5 w-3.5 text-indigo-500" />
+                    <span>계좌 선택</span>
+                  </div>
+                  {selectedAccId !== 'all' && (
+                    <button
+                      id="account-filter-reset-btn"
+                      type="button"
+                      onClick={() => {
+                        setSelectedAccId('all');
+                        setIsAccountLayerOpen(false);
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-indigo-600 transition-colors font-medium cursor-pointer"
+                    >
+                      초기화
+                    </button>
+                  )}
+                </div>
 
-          {/* Category Filter */}
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            className="bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none"
-          >
-            <option value="all">전체 카테고리</option>
-            {CATEGORY_TREE.map((g) => (
-              <optgroup key={g.group} label={g.group}>
-                {g.items.map((it) => (
-                  <option key={`${g.group}-${it}`} value={it}>
-                    {it}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+                <div className="space-y-0.5 max-h-72 overflow-y-auto pr-0.5">
+                  <button
+                    id="account-option-all"
+                    type="button"
+                    onClick={() => {
+                      setSelectedAccId('all');
+                      setIsAccountLayerOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                      selectedAccId === 'all'
+                        ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                        : 'text-slate-700 hover:bg-slate-50 font-medium'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-slate-300" />
+                      <span>전체 계좌</span>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-400">
+                        {accountCounts['all'] || transactions.length}건
+                      </span>
+                      {selectedAccId === 'all' && (
+                        <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                      )}
+                    </div>
+                  </button>
+
+                  {accounts.map((a) => {
+                    const isSelected = selectedAccId === a.id;
+                    const count = accountCounts[a.id] || 0;
+                    return (
+                      <button
+                        key={a.id}
+                        id={`account-option-${a.id}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedAccId(a.id);
+                          setIsAccountLayerOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-50 font-medium'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2 min-w-0 pr-2">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: a.color || '#6366f1' }}
+                          />
+                          <span className="truncate">
+                            <span className="font-semibold">{a.alias}</span>
+                            {a.bankName && (
+                              <span className="ml-1 text-[11px] text-slate-400 font-normal">
+                                ({a.bankName})
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[11px] text-slate-400">
+                            {count}건
+                          </span>
+                          {isSelected && (
+                            <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Type Filter Layer */}
+          <div className="relative">
+            <button
+              id="type-filter-layer-btn"
+              ref={typeBtnRef}
+              type="button"
+              onClick={() => {
+                setIsTypeLayerOpen((prev) => !prev);
+                setIsAccountLayerOpen(false);
+                setIsCategoryLayerOpen(false);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition outline-none cursor-pointer ${
+                selectedType !== 'all'
+                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
+                  : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+              }`}
+              title="거래 유형 선택 레이어 열기"
+            >
+              <Layers className={`h-3.5 w-3.5 ${selectedType !== 'all' ? 'text-indigo-600' : 'text-slate-400'}`} />
+              <span>{selectedTypeLabel}</span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                  isTypeLayerOpen ? 'rotate-180 text-indigo-600' : 'text-slate-400'
+                }`}
+              />
+            </button>
+
+            {/* Type Popover */}
+            {isTypeLayerOpen && (
+              <div
+                id="type-filter-layer-popover"
+                ref={typeLayerRef}
+                className="absolute left-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-slate-200 z-50 p-2 animate-in fade-in zoom-in-95 duration-100"
+              >
+                <div className="flex items-center justify-between px-2.5 py-1.5 mb-1 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                    <Layers className="h-3.5 w-3.5 text-indigo-500" />
+                    <span>유형 선택</span>
+                  </div>
+                  {selectedType !== 'all' && (
+                    <button
+                      id="type-filter-reset-btn"
+                      type="button"
+                      onClick={() => {
+                        setSelectedType('all');
+                        setIsTypeLayerOpen(false);
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-indigo-600 transition-colors font-medium cursor-pointer"
+                    >
+                      초기화
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-0.5">
+                  {TYPE_OPTIONS.map((opt) => {
+                    const isSelected = selectedType === opt.value;
+                    const count = typeCounts[opt.value] ?? 0;
+                    return (
+                      <button
+                        key={opt.value}
+                        id={`type-option-${opt.value}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedType(opt.value);
+                          setIsTypeLayerOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-50 font-medium'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${opt.color}`} />
+                          <span>{opt.label}</span>
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] text-slate-400">{count}건</span>
+                          {isSelected && (
+                            <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Category Filter Layer (1depth only in separate layer) */}
+          <div className="relative">
+            <button
+              id="category-filter-layer-btn"
+              ref={categoryBtnRef}
+              type="button"
+              onClick={() => {
+                setIsCategoryLayerOpen((prev) => !prev);
+                setIsAccountLayerOpen(false);
+                setIsTypeLayerOpen(false);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition outline-none cursor-pointer ${
+                selectedCategory !== 'all'
+                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
+                  : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+              }`}
+              title="카테고리 1depth 선택 레이어 열기"
+            >
+              <Tag className={`h-3.5 w-3.5 ${selectedCategory !== 'all' ? 'text-indigo-600' : 'text-slate-400'}`} />
+              <span>{selectedCategory === 'all' ? '전체 카테고리' : selectedCategory}</span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                  isCategoryLayerOpen ? 'rotate-180 text-indigo-600' : 'text-slate-400'
+                }`}
+              />
+            </button>
+
+            {/* Separate Layer Popover */}
+            {isCategoryLayerOpen && (
+              <div
+                id="category-filter-layer-popover"
+                ref={categoryLayerRef}
+                className="absolute left-0 top-full mt-1.5 w-60 bg-white rounded-xl shadow-xl border border-slate-200 z-50 p-2 animate-in fade-in zoom-in-95 duration-100"
+              >
+                <div className="flex items-center justify-between px-2.5 py-1.5 mb-1 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                    <Filter className="h-3.5 w-3.5 text-indigo-500" />
+                    <span>카테고리 선택 (1depth)</span>
+                  </div>
+                  {selectedCategory !== 'all' && (
+                    <button
+                      id="category-filter-reset-btn"
+                      type="button"
+                      onClick={() => {
+                        setSelectedCategory('all');
+                        setIsCategoryLayerOpen(false);
+                      }}
+                      className="text-[11px] text-slate-400 hover:text-indigo-600 transition-colors font-medium cursor-pointer"
+                    >
+                      초기화
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-0.5 max-h-72 overflow-y-auto pr-0.5">
+                  <button
+                    id="category-option-all"
+                    type="button"
+                    onClick={() => {
+                      setSelectedCategory('all');
+                      setIsCategoryLayerOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                      selectedCategory === 'all'
+                        ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                        : 'text-slate-700 hover:bg-slate-50 font-medium'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-slate-300" />
+                      <span>전체 카테고리</span>
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] text-slate-400">
+                        {depth1Counts['all'] || transactions.length}건
+                      </span>
+                      {selectedCategory === 'all' && (
+                        <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                      )}
+                    </div>
+                  </button>
+
+                  {CATEGORY_TREE.map((g) => {
+                    const isSelected = selectedCategory === g.group;
+                    const count = depth1Counts[g.group] || 0;
+                    return (
+                      <button
+                        key={g.group}
+                        id={`category-option-${g.group}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory(g.group);
+                          setIsCategoryLayerOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors text-left cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-50 text-indigo-700 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-50 font-medium'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              g.group === '수입'
+                                ? 'bg-emerald-500'
+                                : g.group === '식비'
+                                ? 'bg-amber-500'
+                                : g.group === '주거/통신'
+                                ? 'bg-sky-500'
+                                : g.group === '금융/보험/세금'
+                                ? 'bg-violet-500'
+                                : g.group === '생활/쇼핑'
+                                ? 'bg-pink-500'
+                                : g.group === '문화/여가/교통'
+                                ? 'bg-teal-500'
+                                : 'bg-slate-400'
+                            }`}
+                          />
+                          <span>{g.group}</span>
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] text-slate-400">
+                            {count}건
+                          </span>
+                          {isSelected && (
+                            <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Quick Toggles */}
           <button
@@ -1396,8 +2104,40 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           </button>
         </div>
 
-        <div className="text-xs text-slate-500 font-medium">
-          검색 결과 <span className="font-bold text-slate-900">{filteredTransactions.length}건</span>
+        <div className="flex items-center gap-3">
+          <div className="text-xs text-slate-500 font-medium">
+            검색 결과 <span className="font-bold text-slate-900">{sortedTransactions.length}건</span>
+          </div>
+          {sortField && sortDirection !== 'none' && (
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-semibold animate-in fade-in">
+              <span>
+                정렬: {DEFAULT_COLUMNS.find((c) => c.id === sortField)?.label}{' '}
+                {sortDirection === 'asc' ? '오름차순 ⬆' : '내림차순 ⬇'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSortField(null);
+                  setSortDirection('none');
+                }}
+                className="hover:text-rose-600 transition ml-0.5 cursor-pointer p-0.5"
+                title="정렬 해제"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          )}
+          {isCustomColumnConfig && (
+            <button
+              type="button"
+              onClick={handleResetColumnConfig}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-100 text-slate-600 text-[11px] font-medium transition cursor-pointer"
+              title="기본 컬럼 순서 및 너비로 복원"
+            >
+              <RotateCcw className="h-2.5 w-2.5 text-slate-500" />
+              <span>컬럼 설정 초기화</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1405,258 +2145,352 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       <div className="flex flex-1 overflow-hidden">
         {/* Center: Transactions Table */}
         <div className="flex-1 flex flex-col overflow-hidden bg-white border-r border-slate-200">
-          {/* Table Header */}
-          <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center text-xs font-bold text-slate-600 select-none">
-            <div className="w-8 flex items-center justify-center">
-              <button onClick={handleSelectAll} className="p-0.5 text-slate-400 hover:text-slate-700">
-                {selectedIds.size > 0 && selectedIds.size === filteredTransactions.length ? (
-                  <CheckSquare className="h-4 w-4 text-indigo-600" />
-                ) : (
-                  <Square className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-            <div className="w-24">날짜</div>
-            <div className="w-28">통장</div>
-            <div className="flex-1">거래처 / 적요 원문</div>
-            <div className="w-28 text-right">금액(원)</div>
-            <div className="w-32 text-center">카테고리</div>
-            <div className="w-40 text-center">태그</div>
-            <div className="w-16 text-center">증빙</div>
-            <div className="w-16 text-center">상태</div>
-          </div>
+          {/* Scrollable Container with scrollbar-gutter: stable */}
+          <div
+            className="flex-1 overflow-y-auto overflow-x-auto relative"
+            style={{ scrollbarGutter: 'stable' }}
+          >
+            <div style={{ minWidth: `${minTableWidth}px`, width: '100%' }}>
+              {/* Sticky Table Header */}
+              <div
+                className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 select-none shadow-xs text-xs font-bold text-slate-600 border-l-4 border-l-transparent"
+                style={{ display: 'grid', gridTemplateColumns }}
+              >
+                {/* Checkbox */}
+                <div className="flex items-center justify-center py-2.5 shrink-0">
+                  <button onClick={handleSelectAll} className="p-0.5 text-slate-400 hover:text-slate-700 cursor-pointer">
+                    {selectedIds.size > 0 && selectedIds.size === sortedTransactions.length ? (
+                      <CheckSquare className="h-4 w-4 text-indigo-600" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
 
-          {/* Table Body */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-            {filteredTransactions.length === 0 ? (
-              <div className="h-48 flex flex-col items-center justify-center text-xs text-slate-400">
-                <Filter className="h-6 w-6 text-slate-300 mb-1" />
-                <span>해당 조건의 거래가 없습니다</span>
-              </div>
-            ) : (
-              filteredTransactions.map((tx) => {
-                const isSelected = selectedIds.has(tx.id);
-                const isActive = activeTxId === tx.id;
-                const isTransfer = tx.type === 'transfer' || tx.category.startsWith('이체');
-                const isLinked = isTransfer && Boolean(tx.transfer_link_id || tx.transferPairId);
-                const isUnlinkedTransfer = isTransfer && !isLinked && !tx.transfer_unlinked_allowed;
-                const isUnclassified = tx.category === '미분류';
+                {/* Draggable, Sortable & Resizable Column Headers */}
+                {columnOrder.map((colId) => {
+                  const col = DEFAULT_COLUMNS.find((c) => c.id === colId);
+                  if (!col) return null;
+                  const isSorted = sortField === col.id && sortDirection !== 'none';
+                  const isDragging = draggedColId === col.id;
+                  const isDragOver = dragOverColId === col.id && draggedColId !== col.id;
+                  const isResizing = resizingColId === col.id;
 
-                // 상대 행 강조 (활성 거래와 연결된 상대 거래)
-                const isCounterpartOfActive = Boolean(
-                  activeTx &&
-                    (activeTx.transferPairId === tx.id ||
-                      (activeTx.transfer_link_id &&
-                        tx.transfer_link_id === activeTx.transfer_link_id &&
-                        tx.id !== activeTx.id))
-                );
-
-                return (
-                  <div
-                    key={tx.id}
-                    id={`tx-row-${tx.id}`}
-                    onClick={() => setActiveTxId(tx.id)}
-                    className={`px-4 py-3 flex items-center text-xs cursor-pointer transition ${
-                      isActive
-                        ? 'bg-indigo-50/70 border-l-4 border-indigo-600'
-                        : isCounterpartOfActive
-                        ? 'bg-indigo-50/40 border-l-4 border-indigo-300'
-                        : isSelected
-                        ? 'bg-slate-50/80'
-                        : 'hover:bg-slate-50/60'
-                    }`}
-                  >
-                    {/* Checkbox */}
+                  return (
                     <div
-                      className="w-8 flex items-center justify-center"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleSelect(tx.id);
+                      key={col.id}
+                      id={`th-col-${col.id}`}
+                      draggable
+                      onDragStart={(e) => {
+                        if (isResizingRef.current) {
+                          e.preventDefault();
+                          return;
+                        }
+                        handleDragStart(e, col.id);
                       }}
+                      onDragOver={(e) => handleDragOver(e, col.id)}
+                      onDragLeave={(e) => handleDragLeave(e, col.id)}
+                      onDrop={(e) => handleDrop(e, col.id)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => {
+                        if (justDraggedRef.current || isResizingRef.current) return;
+                        handleToggleSort(col.id);
+                      }}
+                      className={`group/colheader relative flex items-center justify-center px-3 py-2.5 cursor-grab active:cursor-grabbing transition-colors select-none min-w-0 ${
+                        isDragging ? 'opacity-30 bg-slate-200' : 'hover:bg-slate-200/60'
+                      } ${isDragOver ? 'border-l-2 border-indigo-600 bg-indigo-50/80' : ''}`}
+                      title={`${col.label} · 클릭: 정렬 변경 | 드래그: 순서 변경 | 우측 경계선 드래그: 너비 조절`}
                     >
-                      {isSelected ? (
-                        <CheckSquare className="h-4 w-4 text-indigo-600" />
-                      ) : (
-                        <Square className="h-4 w-4 text-slate-300 hover:text-slate-500" />
-                      )}
-                    </div>
-
-                    {/* Date */}
-                    <div className="w-24 text-slate-500 font-mono text-[11px]">
-                      {tx.occurredAt.split(' ')[0]}
-                    </div>
-
-                    {/* Account */}
-                    <div className="w-28 text-slate-700 font-semibold truncate pr-2">
-                      {tx.accountAlias?.split(' ')[0]}
-                    </div>
-
-                    {/* Counterparty & Description */}
-                    <div className="flex-1 pr-3 truncate">
-                      <div className="font-bold text-slate-900 flex items-center gap-1.5 truncate">
-                        {isTransfer && !isLinked && (
-                          <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 px-1.5 py-0.2 rounded shrink-0">
-                            이체
-                          </span>
+                      {/* 헤더명 가운데 정렬 */}
+                      <div className="flex items-center justify-center gap-1.5 w-full min-w-0">
+                        <GripVertical className="h-3 w-3 text-slate-300 group-hover/colheader:text-slate-500 shrink-0 opacity-0 group-hover/colheader:opacity-60 transition-opacity" />
+                        <span className={`truncate text-center ${isSorted ? 'text-indigo-600 font-extrabold' : 'text-slate-600 font-bold'}`}>
+                          {col.label}
+                        </span>
+                        {isSorted ? (
+                          sortDirection === 'asc' ? (
+                            <ArrowUp className="h-3.5 w-3.5 text-indigo-600 shrink-0 stroke-[2.5]" />
+                          ) : (
+                            <ArrowDown className="h-3.5 w-3.5 text-indigo-600 shrink-0 stroke-[2.5]" />
+                          )
+                        ) : (
+                          <ArrowUpDown className="h-3 w-3 text-slate-300 opacity-0 group-hover/colheader:opacity-70 transition-opacity shrink-0" />
                         )}
-                        <span>
-                          {(() => {
-                            if (isLinked) {
-                              const counterpart = transactions.find(
-                                (t) =>
-                                  t.id === tx.transferPairId ||
-                                  (tx.transfer_link_id &&
-                                    t.transfer_link_id === tx.transfer_link_id &&
-                                    t.id !== tx.id)
-                              );
-                              const counterpartAccount =
-                                counterpart?.accountAlias?.split(' ')[0] ||
-                                tx.transferAccountAlias?.split(' ')[0] ||
-                                '상대통장';
-                              const roleSuffix =
-                                tx.transfer_role === 'from' || tx.direction === 'out'
-                                  ? '(보냄)'
-                                  : '(받음)';
-                              return `${counterpartAccount} ${roleSuffix}`;
-                            }
-                            if (isTransfer && tx.transferAccountAlias) {
-                              const roleSuffix =
-                                tx.transfer_role === 'from' || tx.direction === 'out'
-                                  ? '(보냄)'
-                                  : '(받음)';
-                              return `${tx.transferAccountAlias.split(' ')[0]} ${roleSuffix}`;
-                            }
-                            return tx.counterparty;
-                          })()}
-                        </span>
                       </div>
-                      <div className="text-[11px] text-slate-400 truncate mt-0.5">
-                        {isLinked
-                          ? tx.counterparty || tx.rawDescription
-                          : tx.rawDescription !== tx.counterparty
-                          ? tx.rawDescription
-                          : ''}
-                        {tx.memo ? ` · [메모] ${tx.memo}` : ''}
-                      </div>
-                    </div>
 
-                    {/* Amount */}
-                    <div
-                      className={`w-28 text-right font-bold tabular-nums ${
-                        isTransfer
-                          ? 'text-slate-600'
-                          : tx.direction === 'in'
-                          ? 'text-emerald-600'
-                          : 'text-slate-900'
-                      }`}
-                    >
-                      {formatSignedKRW(tx.amount, tx.direction, hideAmounts)}
-                    </div>
-
-                    {/* Category */}
-                    <div className="w-32 px-2 text-center">
-                      <span
-                        className={`inline-block max-w-full truncate text-[11px] px-2 py-0.5 rounded-md font-semibold ${
-                          isUnclassified
-                            ? 'bg-amber-100 text-amber-800'
-                            : isTransfer
-                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-                            : 'bg-slate-100 text-slate-700'
+                      {/* Column Resize Handle (화면 상에서는 경계선 숨김 처리, 드래그 기능 유지) */}
+                      <div
+                        className={`absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize z-20 flex items-center justify-center ${
+                          isResizing ? 'bg-indigo-300/30' : ''
                         }`}
+                        onMouseDown={(e) => handleResizeStart(e, col.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        title="드래그하여 열 너비 조절"
                       >
-                        {tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
-                      </span>
+                        {/* 화면 상 경계선 숨김 */}
+                        <div
+                          className={`w-[1px] transition-colors ${
+                            isResizing ? 'h-full bg-indigo-600' : 'bg-transparent'
+                          }`}
+                        />
+                      </div>
                     </div>
+                  );
+                })}
+              </div>
 
-                    {/* Tags */}
-                    <div
-                      onClick={(e) => handleOpenTagPopover(e, tx.id)}
-                      className="w-40 px-2 py-0.5 flex items-center justify-center cursor-pointer hover:bg-indigo-50/40 rounded transition min-h-[32px] group/tagcell"
-                      title="클릭하여 태그 관리 및 추가"
-                    >
-                      {tx.tags && tx.tags.length > 0 ? (
-                        <div className="flex flex-col items-center gap-1 justify-center max-w-full">
-                          {tx.tags.slice(0, 2).map((t, idx) => {
-                            const isSecond = idx === 1;
-                            const hasMore = tx.tags.length > 2;
-                            return (
-                              <div key={t} className="flex items-center gap-1 max-w-full">
-                                <span
-                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50/90 text-indigo-700 border border-indigo-200/60 rounded text-[10px] font-medium max-w-[110px] truncate"
-                                  title={`#${t}`}
-                                >
-                                  <span className="truncate">#{t}</span>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleRemoveTagFromTx(tx.id, t);
-                                    }}
-                                    className="text-indigo-400 hover:text-rose-600 ml-0.5 transition shrink-0"
-                                    title="태그 삭제"
-                                  >
-                                    <X className="h-2.5 w-2.5" />
-                                  </button>
-                                </span>
-                                {isSecond && hasMore && (
-                                  <span
-                                    className="text-[9px] px-1 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-semibold shrink-0"
-                                    title={tx.tags.slice(2).map((rem) => `#${rem}`).join(', ')}
-                                  >
-                                    +{tx.tags.length - 2}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
+              {/* Table Body Rows */}
+              {sortedTransactions.length === 0 ? (
+                <div className="h-48 flex flex-col items-center justify-center text-xs text-slate-400">
+                  <Filter className="h-6 w-6 text-slate-300 mb-1" />
+                  <span>해당 조건의 거래가 없습니다</span>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {sortedTransactions.map((tx) => {
+                    const isSelected = selectedIds.has(tx.id);
+                    const isActive = activeTxId === tx.id;
+                    const isTransfer = tx.type === 'transfer' || tx.category.startsWith('이체');
+                    const isLinked = isTransfer && Boolean(tx.transfer_link_id || tx.transferPairId);
+                    const isUnlinkedTransfer = isTransfer && !isLinked && !tx.transfer_unlinked_allowed;
+                    const isUnclassified = tx.category === '미분류';
+
+                    // 상대 행 강조 (활성 거래와 연결된 상대 거래)
+                    const isCounterpartOfActive = Boolean(
+                      activeTx &&
+                        (activeTx.transferPairId === tx.id ||
+                          (activeTx.transfer_link_id &&
+                            tx.transfer_link_id === activeTx.transfer_link_id &&
+                            tx.id !== activeTx.id))
+                    );
+
+                    const counterpart = transactions.find(
+                      (t) =>
+                        t.id === tx.transferPairId ||
+                        (tx.transfer_link_id &&
+                          t.transfer_link_id === tx.transfer_link_id &&
+                          t.id !== tx.id)
+                    );
+                    const counterpartAccount =
+                      counterpart?.accountAlias?.split(' ')[0] ||
+                      tx.transferAccountAlias?.split(' ')[0] ||
+                      '상대통장';
+                    const roleSuffix =
+                      tx.transfer_role === 'from' || tx.direction === 'out'
+                        ? '(보냄)'
+                        : '(받음)';
+
+                    return (
+                      <div
+                        key={tx.id}
+                        id={`tx-row-${tx.id}`}
+                        onClick={() => setActiveTxId(tx.id)}
+                        className={`text-xs cursor-pointer transition select-none border-l-4 ${
+                          isActive
+                            ? 'bg-indigo-50/70 border-l-indigo-600'
+                            : isCounterpartOfActive
+                            ? 'bg-indigo-50/40 border-l-indigo-400'
+                            : isSelected
+                            ? 'bg-slate-50/80 border-l-transparent'
+                            : 'hover:bg-slate-50/60 border-l-transparent'
+                        }`}
+                        style={{ display: 'grid', gridTemplateColumns }}
+                      >
+                        {/* Checkbox */}
+                        <div
+                          className="flex items-center justify-center py-3 shrink-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleSelect(tx.id);
+                          }}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="h-4 w-4 text-indigo-600 cursor-pointer" />
+                          ) : (
+                            <Square className="h-4 w-4 text-slate-300 hover:text-slate-500 cursor-pointer" />
+                          )}
                         </div>
-                      ) : (
-                        <span className="text-[11px] text-slate-300 group-hover/tagcell:text-indigo-500 transition select-none">
-                          —
-                        </span>
-                      )}
-                    </div>
 
-                    {/* Receipt */}
-                    <div className="w-16 text-center">
-                      {hasProofReceipt(tx) ? (
-                        <span className="text-emerald-600 text-[11px] font-semibold flex items-center justify-center gap-0.5">
-                          <Receipt className="h-3.5 w-3.5" /> 첨부
-                        </span>
-                      ) : (
-                        <span className="text-slate-300 text-[11px]">—</span>
-                      )}
-                    </div>
-
-                    {/* Status */}
-                    <div className="w-16 text-center">
-                      {isLinked ? (
-                        <span className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-0.5">
-                          <ArrowUpDown className="h-2.5 w-2.5 text-slate-600" />
-                          <span>연결</span>
-                        </span>
-                      ) : isUnlinkedTransfer ? (
-                        <span className="text-[10px] bg-rose-50 text-rose-600 border border-rose-200/60 px-1.5 py-0.5 rounded font-bold inline-block whitespace-nowrap">
-                          연결 필요
-                        </span>
-                      ) : tx.isConfirmed ? (
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
-                          확정
-                        </span>
-                      ) : tx.isManualLocked ? (
-                        <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-medium">
-                          수동
-                        </span>
-                      ) : (
-                        <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-bold">
-                          확인필요
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
+                        {/* Columns rendered in user-configured columnOrder */}
+                        {columnOrder.map((colId) => {
+                          switch (colId) {
+                            case 'date':
+                              return (
+                                <div key="date" className="min-w-0 px-3 py-3 flex items-center justify-start text-left text-slate-500 font-mono text-[11px]">
+                                  <span className="truncate">{tx.occurredAt.split(' ')[0]}</span>
+                                </div>
+                              );
+                            case 'account':
+                              return (
+                                <div key="account" className="min-w-0 px-3 py-3 flex items-center justify-start text-left text-slate-700 font-semibold text-xs">
+                                  <span className="truncate" title={tx.accountAlias || ''}>
+                                    {tx.accountAlias?.split(' ')[0]}
+                                  </span>
+                                </div>
+                              );
+                            case 'description':
+                              return (
+                                <div key="description" className="min-w-0 px-3 py-2.5 flex flex-col justify-center text-left">
+                                  <div className="font-bold text-slate-900 flex items-center gap-1.5 min-w-0">
+                                    {isTransfer && !isLinked && (
+                                      <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 px-1.5 py-0.2 rounded shrink-0">
+                                        이체
+                                      </span>
+                                    )}
+                                    <span className="truncate" title={isLinked ? `${counterpartAccount} ${roleSuffix}` : tx.counterparty}>
+                                      {(() => {
+                                        if (isLinked) {
+                                          return `${counterpartAccount} ${roleSuffix}`;
+                                        }
+                                        if (isTransfer && tx.transferAccountAlias) {
+                                          return `${tx.transferAccountAlias.split(' ')[0]} ${roleSuffix}`;
+                                        }
+                                        return tx.counterparty;
+                                      })()}
+                                    </span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-400 truncate mt-0.5" title={tx.rawDescription || tx.memo || ''}>
+                                    {isLinked
+                                      ? tx.counterparty || tx.rawDescription
+                                      : tx.rawDescription !== tx.counterparty
+                                      ? tx.rawDescription
+                                      : ''}
+                                    {tx.memo ? ` · [메모] ${tx.memo}` : ''}
+                                  </div>
+                                </div>
+                              );
+                            case 'amount':
+                              return (
+                                <div
+                                  key="amount"
+                                  className={`min-w-0 px-3 py-3 flex items-center justify-end text-right font-bold tabular-nums text-xs ${
+                                    isTransfer
+                                      ? 'text-slate-600'
+                                      : tx.direction === 'in'
+                                      ? 'text-emerald-600'
+                                      : 'text-slate-900'
+                                  }`}
+                                >
+                                  <span className="truncate">{formatSignedKRW(tx.amount, tx.direction, hideAmounts)}</span>
+                                </div>
+                              );
+                            case 'category':
+                              return (
+                                <div key="category" className="min-w-0 px-3 py-3 flex items-center justify-start text-left">
+                                  <span
+                                    className={`inline-block max-w-full truncate text-[11px] px-2 py-0.5 rounded-md font-semibold ${
+                                      isUnclassified
+                                        ? 'bg-amber-100 text-amber-800'
+                                        : isTransfer
+                                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+                                        : 'bg-slate-100 text-slate-700'
+                                    }`}
+                                    title={tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
+                                  >
+                                    {tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
+                                  </span>
+                                </div>
+                              );
+                            case 'tags':
+                              return (
+                                <div
+                                  key="tags"
+                                  onClick={(e) => handleOpenTagPopover(e, tx.id)}
+                                  className="min-w-0 px-3 py-1 flex items-center justify-start text-left cursor-pointer hover:bg-indigo-50/40 rounded transition min-h-[32px] group/tagcell"
+                                  title="클릭하여 태그 관리 및 추가"
+                                >
+                                  {tx.tags && tx.tags.length > 0 ? (
+                                    <div className="flex flex-wrap items-center gap-1 max-w-full">
+                                      {tx.tags.slice(0, 2).map((t, idx) => {
+                                        const isSecond = idx === 1;
+                                        const hasMore = tx.tags.length > 2;
+                                        return (
+                                          <div key={t} className="flex items-center gap-1 max-w-full">
+                                            <span
+                                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50/90 text-indigo-700 border border-indigo-200/60 rounded text-[10px] font-medium max-w-[110px] truncate"
+                                              title={`#${t}`}
+                                            >
+                                              <span className="truncate">#{t}</span>
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRemoveTagFromTx(tx.id, t);
+                                                }}
+                                                className="text-indigo-400 hover:text-rose-600 ml-0.5 transition shrink-0 cursor-pointer"
+                                                title="태그 삭제"
+                                              >
+                                                <X className="h-2.5 w-2.5" />
+                                              </button>
+                                            </span>
+                                            {isSecond && hasMore && (
+                                              <span
+                                                className="text-[9px] px-1 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-semibold shrink-0"
+                                                title={tx.tags.slice(2).map((rem) => `#${rem}`).join(', ')}
+                                              >
+                                                +{tx.tags.length - 2}
+                                              </span>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <span className="text-[11px] text-slate-300 group-hover/tagcell:text-indigo-500 transition select-none">
+                                      —
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            case 'receipt':
+                              return (
+                                <div key="receipt" className="min-w-0 px-2 py-3 flex items-center justify-center text-center">
+                                  {hasProofReceipt(tx) ? (
+                                    <span className="text-emerald-600 text-[11px] font-semibold flex items-center justify-center gap-0.5">
+                                      <Receipt className="h-3.5 w-3.5" /> 첨부
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-300 text-[11px]">—</span>
+                                  )}
+                                </div>
+                              );
+                            case 'status':
+                              return (
+                                <div key="status" className="min-w-0 px-2 py-3 flex items-center justify-center text-center">
+                                  {isLinked ? (
+                                    <span className="text-[10px] bg-slate-100 text-slate-700 border border-slate-200 px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-0.5">
+                                      <ArrowUpDown className="h-2.5 w-2.5 text-slate-600" />
+                                      <span>연결</span>
+                                    </span>
+                                  ) : isUnlinkedTransfer ? (
+                                    <span className="text-[10px] bg-rose-50 text-rose-600 border border-rose-200/60 px-1.5 py-0.5 rounded font-bold inline-block whitespace-nowrap">
+                                      연결 필요
+                                    </span>
+                                  ) : tx.isConfirmed ? (
+                                    <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded font-medium">
+                                      확정
+                                    </span>
+                                  ) : tx.isManualLocked ? (
+                                    <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-medium">
+                                      수동
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded font-bold">
+                                      확인필요
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            default:
+                              return null;
+                          }
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Batch Actions Toolbar (Appears when items are selected) */}
