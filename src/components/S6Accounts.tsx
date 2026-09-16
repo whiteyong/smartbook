@@ -7,7 +7,6 @@ import {
   Shield,
   Eye,
   EyeOff,
-  CheckCircle2,
   AlertCircle,
   HelpCircle,
   X,
@@ -45,6 +44,7 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [accountToDelete, setAccountToDelete] = useState<Account | null>(null);
 
   // Configuration state (banks & roles)
   const [accountConfig, setAccountConfig] = useState<AccountConfig>(DEFAULT_ACCOUNT_CONFIG);
@@ -152,33 +152,34 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
     e.preventDefault();
     if (!alias.trim() || !accountNumber.trim()) return;
 
-    const masked = maskAccountNumber(accountNumber.trim());
+    const rawNumber = accountNumber.trim();
+    const memoText = memo.trim() || '';
 
     if (editingAccountId) {
       await onUpdateAccount(editingAccountId, {
         bankName,
-        accountNumber: masked,
-        rawAccountNumber: accountNumber.trim(),
+        accountNumber: rawNumber,
+        rawAccountNumber: rawNumber,
         alias: alias.trim(),
         role,
         initialBalance,
         asOfDate,
         color,
         isPublic,
-        memo: memo.trim() || undefined,
+        memo: memoText,
       });
     } else {
       await onAddAccount({
         bankName,
-        accountNumber: masked,
-        rawAccountNumber: accountNumber.trim(),
+        accountNumber: rawNumber,
+        rawAccountNumber: rawNumber,
         alias: alias.trim(),
         role,
         initialBalance,
         asOfDate,
         color,
         isPublic,
-        memo: memo.trim() || undefined,
+        memo: memoText,
       });
     }
 
@@ -194,7 +195,7 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
     const newRole: AccountRoleConfig = {
       id: newId,
       label: trimmed,
-      description: quickRoleDesc.trim() || undefined,
+      description: quickRoleDesc.trim() || '',
       color: '#6366F1',
     };
 
@@ -295,8 +296,8 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
                     <h3 className="text-sm font-bold text-slate-900">
                       {acc.alias}
                     </h3>
-                    <div className="text-xs text-slate-400 font-mono mt-0.5">
-                      {acc.bankName} · {acc.accountNumber}
+                    <div className="text-xs text-slate-500 font-mono mt-0.5">
+                      {acc.bankName} · {acc.rawAccountNumber || acc.accountNumber}
                     </div>
                   </div>
                 </div>
@@ -310,12 +311,8 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
                     <Edit3 className="h-4 w-4" />
                   </button>
                   <button
-                    onClick={() => {
-                      if (confirm(`'${acc.alias}' 계좌를 삭제하시겠습니까?`)) {
-                        onDeleteAccount(acc.id);
-                      }
-                    }}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg"
+                    onClick={() => setAccountToDelete(acc)}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition"
                     title="계좌 삭제"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -339,12 +336,8 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
                 </div>
               </div>
 
-              {/* Integrity status */}
-              <div className="flex items-center justify-between text-xs pt-1">
-                <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                  실제 은행 잔액과 1원 단위 일치
-                </span>
+              {/* Last updated */}
+              <div className="flex items-center justify-end text-xs pt-1">
                 <span className="text-slate-400 text-[11px]">최종 갱신: {acc.lastUpdated || acc.asOfDate}</span>
               </div>
             </div>
@@ -682,7 +675,7 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="예: 110-384-592910 (목록에서는 자동 마스킹 표시됩니다)"
+                  placeholder="예: 110-384-592910"
                   value={accountNumber}
                   onChange={(e) => setAccountNumber(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 font-mono"
@@ -753,6 +746,55 @@ export const S6Accounts: React.FC<S6AccountsProps> = ({
         onUpdateAccount={onUpdateAccount}
         initialTab={settingsInitialTab}
       />
+
+      {/* Account Deletion Confirmation Modal */}
+      {accountToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">계좌 삭제 확인</h3>
+                <p className="text-xs text-slate-500 mt-0.5">정말 이 계좌를 삭제하시겠습니까?</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200/70 text-xs space-y-1">
+              <div className="font-semibold text-slate-800">{accountToDelete.alias}</div>
+              <div className="text-slate-500 font-mono">
+                {accountToDelete.bankName} · {accountToDelete.rawAccountNumber || accountToDelete.accountNumber}
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 leading-relaxed">
+              계좌를 삭제하면 계좌 목록에서 즉시 제외됩니다. (기존 거래 내역은 안전하게 보존됩니다)
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setAccountToDelete(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const targetId = accountToDelete.id;
+                  setAccountToDelete(null);
+                  await onDeleteAccount(targetId);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 text-white hover:bg-rose-700 rounded-xl shadow-2xs transition cursor-pointer"
+              >
+                삭제하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

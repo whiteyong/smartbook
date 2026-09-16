@@ -68,6 +68,25 @@ export const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
   roles: DEFAULT_ACCOUNT_ROLES,
 };
 
+/**
+ * Recursively strips keys with `undefined` values to prevent Firestore unsupported field value errors.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined || typeof data !== 'object') {
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data as Record<string, any>)) {
+    if (value !== undefined) {
+      cleaned[key] = typeof value === 'object' && value !== null ? sanitizeForFirestore(value) : value;
+    }
+  }
+  return cleaned as T;
+}
+
 // 1. Initial Seeding Check
 export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
   try {
@@ -80,22 +99,22 @@ export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
 
     // Seed Accounts
     for (const acc of INITIAL_ACCOUNTS) {
-      batch.set(doc(db, ACCOUNTS_COL, acc.id), acc);
+      batch.set(doc(db, ACCOUNTS_COL, acc.id), sanitizeForFirestore(acc));
     }
 
     // Seed Rules
     for (const rule of INITIAL_RULES) {
-      batch.set(doc(db, RULES_COL, rule.id), rule);
+      batch.set(doc(db, RULES_COL, rule.id), sanitizeForFirestore(rule));
     }
 
     // Seed Budgets
     for (const bg of INITIAL_BUDGETS) {
-      batch.set(doc(db, BUDGETS_COL, bg.id), bg);
+      batch.set(doc(db, BUDGETS_COL, bg.id), sanitizeForFirestore(bg));
     }
 
     // Seed Transactions
     for (const tx of INITIAL_TRANSACTIONS) {
-      batch.set(doc(db, TRANSACTIONS_COL, tx.id), tx);
+      batch.set(doc(db, TRANSACTIONS_COL, tx.id), sanitizeForFirestore(tx));
     }
 
     // Seed Settings
@@ -106,8 +125,8 @@ export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
       ownerName: '가계 관리자',
       hideAmounts: false,
     };
-    batch.set(doc(db, SETTINGS_COL, 'general'), defaultSettings);
-    batch.set(doc(db, SETTINGS_COL, 'account_config'), DEFAULT_ACCOUNT_CONFIG);
+    batch.set(doc(db, SETTINGS_COL, 'general'), sanitizeForFirestore(defaultSettings));
+    batch.set(doc(db, SETTINGS_COL, 'account_config'), sanitizeForFirestore(DEFAULT_ACCOUNT_CONFIG));
 
     await batch.commit();
     return true;
@@ -162,11 +181,12 @@ export function subscribeToAccountConfig(callback: (config: AccountConfig) => vo
 
 export async function saveAccountConfig(config: AccountConfig): Promise<void> {
   localStorage.setItem(LS_ACCOUNT_CONFIG, JSON.stringify(config));
+  const sanitized = sanitizeForFirestore({
+    ...config,
+    updatedAt: new Date().toISOString(),
+  });
   try {
-    await setDoc(doc(db, SETTINGS_COL, 'account_config'), {
-      ...config,
-      updatedAt: new Date().toISOString(),
-    });
+    await setDoc(doc(db, SETTINGS_COL, 'account_config'), sanitized);
   } catch (err) {
     console.warn('Firestore setDoc account_config failed, saved to local storage:', err);
   }
@@ -295,7 +315,8 @@ export async function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 
   };
 
   try {
-    await setDoc(doc(db, TRANSACTIONS_COL, id), fullTx);
+    const sanitized = sanitizeForFirestore(fullTx);
+    await setDoc(doc(db, TRANSACTIONS_COL, id), sanitized);
   } catch {
     const local = JSON.parse(localStorage.getItem(LS_TRANSACTIONS) || '[]');
     local.unshift(fullTx);
@@ -305,7 +326,7 @@ export async function addTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 
 }
 
 export async function updateTransaction(id: string, updates: Partial<Transaction>): Promise<void> {
-  const payload = { ...updates, updatedAt: new Date().toISOString() };
+  const payload = sanitizeForFirestore({ ...updates, updatedAt: new Date().toISOString() });
   // 1. Always sync to local storage immediately
   try {
     const local = JSON.parse(localStorage.getItem(LS_TRANSACTIONS) || '[]');
@@ -340,10 +361,10 @@ export async function addBatchTransactions(txs: Transaction[], batchInfo?: Impor
   try {
     const batch = writeBatch(db);
     for (const tx of txs) {
-      batch.set(doc(db, TRANSACTIONS_COL, tx.id), tx);
+      batch.set(doc(db, TRANSACTIONS_COL, tx.id), sanitizeForFirestore(tx));
     }
     if (batchInfo) {
-      batch.set(doc(db, BATCHES_COL, batchInfo.id), batchInfo);
+      batch.set(doc(db, BATCHES_COL, batchInfo.id), sanitizeForFirestore(batchInfo));
     }
     await batch.commit();
   } catch {
@@ -357,7 +378,7 @@ export async function batchUpdateTransactions(txs: Transaction[]): Promise<void>
   try {
     const batch = writeBatch(db);
     for (const tx of txs) {
-      batch.set(doc(db, TRANSACTIONS_COL, tx.id), tx, { merge: true });
+      batch.set(doc(db, TRANSACTIONS_COL, tx.id), sanitizeForFirestore(tx), { merge: true });
     }
     await batch.commit();
   } catch {
@@ -391,38 +412,62 @@ export async function undoBatchImport(batchId: string): Promise<number> {
 // 4. Accounts CRUD
 export async function addAccount(account: Omit<Account, 'id'>): Promise<Account> {
   const id = 'acc_' + Date.now();
-  const fullAccount: Account = { ...account, id };
+  const fullAccount: Account = {
+    ...account,
+    id,
+    memo: account.memo || '',
+    rawAccountNumber: account.rawAccountNumber || account.accountNumber,
+  };
+  const sanitized = sanitizeForFirestore(fullAccount);
   try {
-    await setDoc(doc(db, ACCOUNTS_COL, id), fullAccount);
-  } catch {
     const local = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || '[]');
-    local.push(fullAccount);
-    localStorage.setItem(LS_ACCOUNTS, JSON.stringify(local));
+    const exists = local.some((a: Account) => a.id === id);
+    if (!exists) {
+      local.push(sanitized);
+      localStorage.setItem(LS_ACCOUNTS, JSON.stringify(local));
+    }
+  } catch (err) {
+    console.error('Failed to save account to localStorage:', err);
   }
-  return fullAccount;
+
+  // Sync to Firestore without blocking UI
+  setDoc(doc(db, ACCOUNTS_COL, id), sanitized).catch((err) => {
+    console.warn('Firestore addAccount sync failed, saved locally:', err);
+  });
+
+  return sanitized;
 }
 
 export async function updateAccount(id: string, updates: Partial<Account>): Promise<void> {
+  const sanitized = sanitizeForFirestore(updates);
   try {
-    await updateDoc(doc(db, ACCOUNTS_COL, id), updates);
-  } catch {
     const local = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || '[]');
     const idx = local.findIndex((a: Account) => a.id === id);
     if (idx !== -1) {
-      local[idx] = { ...local[idx], ...updates };
+      local[idx] = { ...local[idx], ...sanitized };
       localStorage.setItem(LS_ACCOUNTS, JSON.stringify(local));
     }
+  } catch (err) {
+    console.error('Failed to update account in localStorage:', err);
   }
+
+  updateDoc(doc(db, ACCOUNTS_COL, id), sanitized).catch((err) => {
+    console.warn('Firestore updateAccount sync failed, saved locally:', err);
+  });
 }
 
 export async function deleteAccount(id: string): Promise<void> {
   try {
-    await deleteDoc(doc(db, ACCOUNTS_COL, id));
-  } catch {
     const local = JSON.parse(localStorage.getItem(LS_ACCOUNTS) || '[]');
     const filtered = local.filter((a: Account) => a.id !== id);
     localStorage.setItem(LS_ACCOUNTS, JSON.stringify(filtered));
+  } catch (err) {
+    console.error('Failed to delete account in localStorage:', err);
   }
+
+  deleteDoc(doc(db, ACCOUNTS_COL, id)).catch((err) => {
+    console.warn('Firestore deleteAccount sync failed, saved locally:', err);
+  });
 }
 
 // 5. Rules CRUD & Evaluation Engine
@@ -436,7 +481,8 @@ export async function addRule(rule: Omit<ClassificationRule, 'id' | 'createdAt' 
     updatedAt: now,
   };
   try {
-    await setDoc(doc(db, RULES_COL, id), fullRule);
+    const sanitizedRule = sanitizeForFirestore(fullRule);
+    await setDoc(doc(db, RULES_COL, id), sanitizedRule);
   } catch {
     const local = JSON.parse(localStorage.getItem(LS_RULES) || '[]');
     local.push(fullRule);
@@ -446,7 +492,7 @@ export async function addRule(rule: Omit<ClassificationRule, 'id' | 'createdAt' 
 }
 
 export async function updateRule(id: string, updates: Partial<ClassificationRule>): Promise<void> {
-  const payload = { ...updates, updatedAt: new Date().toISOString() };
+  const payload = sanitizeForFirestore({ ...updates, updatedAt: new Date().toISOString() });
   try {
     await updateDoc(doc(db, RULES_COL, id), payload);
   } catch {
@@ -647,27 +693,64 @@ export function calculateAccountBalances(
 
 // 8. Budgets CRUD
 export async function updateBudget(id: string, updates: Partial<Budget>): Promise<void> {
+  const sanitized = sanitizeForFirestore(updates);
+  // 1. Always update local storage first so changes are preserved immediately
   try {
-    await updateDoc(doc(db, BUDGETS_COL, id), updates);
-  } catch {
     const local = JSON.parse(localStorage.getItem(LS_BUDGETS) || '[]');
     const idx = local.findIndex((b: Budget) => b.id === id);
     if (idx !== -1) {
-      local[idx] = { ...local[idx], ...updates };
+      local[idx] = { ...local[idx], ...sanitized };
       localStorage.setItem(LS_BUDGETS, JSON.stringify(local));
     }
+  } catch (err) {
+    console.error('LocalStorage updateBudget error:', err);
+  }
+
+  // 2. Persist to Firestore with merge: true (creates doc if it did not exist yet in Firestore)
+  try {
+    await setDoc(doc(db, BUDGETS_COL, id), sanitized, { merge: true });
+  } catch (err) {
+    console.warn('Firestore updateBudget sync failed, saved locally:', err);
   }
 }
 
 export async function addBudget(budget: Omit<Budget, 'id'>): Promise<Budget> {
   const id = 'b_' + Date.now();
   const fullBudget = { ...budget, id };
+  const sanitized = sanitizeForFirestore(fullBudget);
+
+  // 1. Immediately update local storage
   try {
-    await setDoc(doc(db, BUDGETS_COL, id), fullBudget);
-  } catch {
     const local = JSON.parse(localStorage.getItem(LS_BUDGETS) || '[]');
-    local.push(fullBudget);
+    local.push(sanitized);
     localStorage.setItem(LS_BUDGETS, JSON.stringify(local));
+  } catch (err) {
+    console.error('LocalStorage addBudget error:', err);
   }
-  return fullBudget;
+
+  // 2. Sync to Firestore
+  try {
+    await setDoc(doc(db, BUDGETS_COL, id), sanitized);
+  } catch (err) {
+    console.warn('Firestore addBudget sync failed, saved locally:', err);
+  }
+  return sanitized;
+}
+
+export async function deleteBudget(id: string): Promise<void> {
+  // 1. Immediately update local storage
+  try {
+    const local = JSON.parse(localStorage.getItem(LS_BUDGETS) || '[]');
+    const filtered = local.filter((b: Budget) => b.id !== id);
+    localStorage.setItem(LS_BUDGETS, JSON.stringify(filtered));
+  } catch (err) {
+    console.error('LocalStorage deleteBudget error:', err);
+  }
+
+  // 2. Delete from Firestore
+  try {
+    await deleteDoc(doc(db, BUDGETS_COL, id));
+  } catch (err) {
+    console.warn('Firestore deleteBudget sync failed, deleted locally:', err);
+  }
 }

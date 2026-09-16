@@ -4,7 +4,7 @@ export const INITIAL_ACCOUNTS: Account[] = [
   {
     id: 'acc_salary',
     bankName: 'KB국민은행',
-    accountNumber: '110-***-**2910',
+    accountNumber: '110-384-592910',
     rawAccountNumber: '110-384-592910',
     alias: '급여통장 (수신)',
     role: 'salary',
@@ -17,7 +17,7 @@ export const INITIAL_ACCOUNTS: Account[] = [
   {
     id: 'acc_fixed',
     bankName: '우리은행',
-    accountNumber: '1002-***-**4821',
+    accountNumber: '1002-841-394821',
     rawAccountNumber: '1002-841-394821',
     alias: '고정비 통장 (주거/보험)',
     role: 'fixed',
@@ -30,7 +30,7 @@ export const INITIAL_ACCOUNTS: Account[] = [
   {
     id: 'acc_living',
     bankName: '신한은행',
-    accountNumber: '110-***-**7743',
+    accountNumber: '110-928-117743',
     rawAccountNumber: '110-928-117743',
     alias: '생활비 통장 (체크카드)',
     role: 'living',
@@ -43,7 +43,7 @@ export const INITIAL_ACCOUNTS: Account[] = [
   {
     id: 'acc_savings',
     bankName: '토스뱅크',
-    accountNumber: '1000-***-**8890',
+    accountNumber: '1000-421-998890',
     rawAccountNumber: '1000-421-998890',
     alias: '저축·비상금 통장',
     role: 'savings',

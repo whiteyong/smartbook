@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -10,6 +10,11 @@ import {
   FileSpreadsheet,
   Coins,
   Sparkles,
+  Wallet,
+  Tag,
+  Edit2,
+  Check,
+  X,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -39,6 +44,9 @@ interface S1DashboardProps {
     type?: string;
   }) => void;
   onNavigateToUpload: () => void;
+  onNavigateToBudget?: () => void;
+  onUpdateBudget?: (id: string, updates: Partial<Budget>) => Promise<void>;
+  onAddBudget?: (budget: Omit<Budget, 'id'>) => Promise<any>;
 }
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#6366F1'];
@@ -51,7 +59,110 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
   hideAmounts,
   onNavigateToTransactions,
   onNavigateToUpload,
+  onNavigateToBudget,
+  onUpdateBudget,
+  onAddBudget,
 }) => {
+  // Account budget inline edit states for dashboard cards
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [editAmountStr, setEditAmountStr] = useState<string>('');
+  const [isSavingAccount, setIsSavingAccount] = useState<boolean>(false);
+  // Local optimistic overrides so user sees amount update instantly without waiting
+  const [localBudgetOverrides, setLocalBudgetOverrides] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    setLocalBudgetOverrides({});
+  }, [selectedMonth]);
+
+  const startEditAccount = (accId: string, currentAmount: number) => {
+    setEditingAccountId(accId);
+    setEditAmountStr(currentAmount > 0 ? String(currentAmount) : '');
+  };
+
+  const cancelAccountEdit = () => {
+    setEditingAccountId(null);
+    setEditAmountStr('');
+  };
+
+  const saveAccountBudget = async (accId: string, accAlias: string) => {
+    if (!onUpdateBudget || !onAddBudget) return;
+    const cleanDigits = editAmountStr.replace(/[^0-9]/g, '');
+    const amountNumber = cleanDigits === '' ? 0 : parseInt(cleanDigits, 10);
+
+    if (isNaN(amountNumber) || amountNumber < 0) {
+      setEditingAccountId(null);
+      return;
+    }
+
+    // 1. UI 즉시 반영 (딜레이 없는 즉시 업데이트)
+    setLocalBudgetOverrides((prev) => ({ ...prev, [accId]: amountNumber }));
+    setEditingAccountId(null);
+    setEditAmountStr('');
+
+    // 2. 백엔드/스토리지 영구 저장
+    setIsSavingAccount(true);
+    try {
+      const existing = budgets.find(
+        (b) => b.targetType === 'account' && b.targetId === accId && b.month === selectedMonth
+      );
+      if (existing) {
+        await onUpdateBudget(existing.id, { amount: amountNumber });
+      } else {
+        await onAddBudget({
+          targetType: 'account',
+          targetId: accId,
+          targetName: accAlias,
+          month: selectedMonth,
+          amount: amountNumber,
+          rollover: false,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save account budget from dashboard:', err);
+    } finally {
+      setIsSavingAccount(false);
+    }
+  };
+
+  const handleAccountInputKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    accId: string,
+    accAlias: string
+  ) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveAccountBudget(accId, accAlias);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelAccountEdit();
+      return;
+    }
+    const allowedKeys = [
+      'Backspace',
+      'Delete',
+      'Tab',
+      'ArrowLeft',
+      'ArrowRight',
+      'Home',
+      'End',
+      'Enter',
+      'Escape',
+    ];
+    if (allowedKeys.includes(e.key) || e.ctrlKey || e.metaKey || e.altKey) {
+      return;
+    }
+    // 모바일 가상 키보드 및 IME 입력 호환
+    if (e.key === 'Unidentified' || e.key === 'Process') {
+      return;
+    }
+    // 숫자(0-9) 이외의 텍스트, 한글, 기호(-, +, ., e 등) 일체 입력 차단
+    if (!/^[0-9]$/.test(e.key)) {
+      e.preventDefault();
+    }
+  };
+
   // Filter transactions by selected month (이체는 수입/지출 통계에서 제외!)
   const monthTransactions = transactions.filter((t) => t.occurredAt.startsWith(selectedMonth));
 
@@ -99,7 +210,8 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
   // 5. 통장별 봉투 예산 소진율
   const accountBudgets = accounts.map((acc) => {
     const bg = budgets.find((b) => b.targetType === 'account' && b.targetId === acc.id && b.month === selectedMonth);
-    const budgetAmount = bg ? bg.amount : 0;
+    const rawBudgetAmount = bg ? bg.amount : 0;
+    const budgetAmount = localBudgetOverrides[acc.id] !== undefined ? localBudgetOverrides[acc.id] : rawBudgetAmount;
 
     // 실적 = 해당 통장의 순수 지출 (이체 출금 제외!)
     const spent = monthTransactions
@@ -121,6 +233,69 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
       spent,
       percent,
       remaining,
+      isPaceOver,
+    };
+  });
+
+  // 5-1. 카테고리별 예산 소진율 (사용자 요청: 가계 대시보드에서 카테고리별 예산 현황 표기)
+  const DASHBOARD_BUDGET_TAB_KEY = 'ledger_dashboard_budget_tab';
+
+  const [budgetTab, setBudgetTab] = useState<'all' | 'account' | 'category'>(() => {
+    try {
+      const saved = localStorage.getItem(DASHBOARD_BUDGET_TAB_KEY);
+      if (saved === 'all' || saved === 'account' || saved === 'category') {
+        return saved;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return 'all';
+  });
+
+  const handleSelectBudgetTab = (tab: 'all' | 'account' | 'category') => {
+    setBudgetTab(tab);
+    try {
+      localStorage.setItem(DASHBOARD_BUDGET_TAB_KEY, tab);
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  const categoryBudgetList = budgets.filter(
+    (b) => b.targetType === 'category' && b.month === selectedMonth
+  );
+
+  const isMatchingCategory = (txCat: string, targetName: string, targetId?: string) => {
+    if (!txCat) return false;
+    if (txCat === targetName) return true;
+    if (targetId && (txCat === targetId || txCat.startsWith(targetId + ' >') || txCat.startsWith(targetId))) return true;
+    const baseName = targetName.replace(/\s*\(전체\)|\s*전체$/, '').trim();
+    if (txCat.startsWith(baseName + ' >') || txCat === baseName) return true;
+    return false;
+  };
+
+  const categoryBudgets = categoryBudgetList.map((bg) => {
+    const spent = expenseTxs
+      .filter((t) => isMatchingCategory(t.category, bg.targetName, bg.targetId))
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    const percent = bg.amount > 0 ? Math.round((spent / bg.amount) * 100) : 0;
+    const remaining = bg.amount - spent;
+    const isOver = spent > bg.amount;
+    const today = new Date().getDate();
+    const daysInMonth = new Date(currYear, currMonthNum, 0).getDate();
+    const expectedPercent = Math.round((today / daysInMonth) * 100);
+    const isPaceOver = !isOver && percent > expectedPercent + 10;
+
+    return {
+      budget: bg,
+      targetName: bg.targetName,
+      budgetAmount: bg.amount,
+      spent,
+      percent,
+      remaining,
+      rollover: bg.rollover,
+      isOver,
       isPaceOver,
     };
   });
@@ -461,86 +636,357 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
         </div>
       </div>
 
-      {/* Row 3: Envelope Budgets per Account (PRD F-07) */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs">
-        <div className="flex items-center justify-between mb-4">
+      {/* Row 3: Envelope Budgets per Account & Category (PRD F-07 & Category Budgets) */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs space-y-5">
+        {/* Header with Title and Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              통장 분리형 봉투 예산 (물리적 예산 통제)
-              <span className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md font-medium">
-                통장 = 봉투
-              </span>
+              <Wallet className="h-4 w-4 text-indigo-600" />
+              예산 현황
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              각 통장별 배정 예산과 실제 지출 실적 대조 (계좌 간 이체 금액은 자동 제외되어 왜곡 방지)
+              통장별 물리적 봉투와 핵심 카테고리별 배정 예산 대비 실제 지출 실적을 모니터링합니다.
             </p>
           </div>
-          <button
-            onClick={onNavigateToUpload}
-            className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1"
-          >
-            엑셀 올리고 잔액 맞추기 <ArrowRight className="h-3.5 w-3.5" />
-          </button>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {/* View Filter Segment */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => handleSelectBudgetTab('all')}
+                className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                  budgetTab === 'all'
+                    ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                모두 보기
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectBudgetTab('account')}
+                className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                  budgetTab === 'account'
+                    ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                계좌별 ({accountBudgets.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectBudgetTab('category')}
+                className={`px-2.5 py-1 rounded-lg transition cursor-pointer ${
+                  budgetTab === 'category'
+                    ? 'bg-white text-indigo-700 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                카테고리별 ({categoryBudgets.length})
+              </button>
+            </div>
+
+            {onNavigateToBudget ? (
+              <button
+                type="button"
+                onClick={onNavigateToBudget}
+                className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1 ml-1 cursor-pointer"
+              >
+                예산 관리 <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onNavigateToUpload}
+                className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1 ml-1 cursor-pointer"
+              >
+                엑셀 올리기 <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {accountBudgets.map(({ account, budgetAmount, spent, percent, remaining, isPaceOver }) => (
-            <div
-              key={account.id}
-              className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 hover:bg-white hover:shadow-2xs transition"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: account.color }}></span>
-                  {account.alias}
+        {/* Section 1: Account Envelope Budgets */}
+        {(budgetTab === 'all' || budgetTab === 'account') && (
+          <div className="space-y-3">
+            {budgetTab === 'all' && (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Wallet className="h-3.5 w-3.5 text-slate-500" />
+                  계좌별 예산 현황 (물리적 예산)
                 </span>
-                <span className="text-[10px] text-slate-400">{account.bankName}</span>
+                <span className="text-[11px] text-slate-400">계좌 간 이체 금액은 자동 제외되어 실지출만 집계</span>
               </div>
+            )}
 
-              <div className="mt-3 flex items-baseline justify-between">
-                <div>
-                  <span className="text-xs text-slate-400 block">지출 실적</span>
-                  <span className="text-base font-bold text-slate-900">{formatKRW(spent, hideAmounts)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs text-slate-400 block">월 배정 예산</span>
-                  <span className="text-xs font-semibold text-slate-600">{formatKRW(budgetAmount, hideAmounts)}</span>
-                </div>
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {accountBudgets.map(({ account, budgetAmount, spent, percent, remaining, isPaceOver }) => (
+                <div
+                  key={account.id}
+                  onClick={() => {
+                    if (editingAccountId !== account.id) {
+                      onNavigateToTransactions({ accountId: account.id });
+                    }
+                  }}
+                  className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 hover:bg-white hover:shadow-2xs transition cursor-pointer group relative"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 group-hover:text-indigo-600 transition">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: account.color }}></span>
+                      {account.alias}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400">{account.bankName}</span>
+                      {/* 1. 신규 계좌 및 미설정 계좌 연필 아이콘 상시 제공 */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (editingAccountId === account.id) {
+                            cancelAccountEdit();
+                          } else {
+                            startEditAccount(account.id, budgetAmount);
+                          }
+                        }}
+                        className={`p-1 rounded transition cursor-pointer ${
+                          editingAccountId === account.id
+                            ? 'bg-indigo-100 text-indigo-700'
+                            : 'text-slate-400 hover:text-indigo-600 hover:bg-slate-200/60'
+                        }`}
+                        title={budgetAmount > 0 ? '예산 금액 수정' : '신규 예산 설정'}
+                      >
+                        <Edit2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Progress Bar */}
-              <div className="mt-3">
-                <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      percent > 100
-                        ? 'bg-rose-500'
-                        : percent > 85
-                        ? 'bg-amber-500'
-                        : 'bg-emerald-500'
-                    }`}
-                    style={{ width: `${Math.min(percent, 100)}%` }}
-                  ></div>
-                </div>
-                <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                  <span className="font-bold text-slate-700">{percent}% 소진</span>
-                  {percent > 100 ? (
-                    <span className="text-rose-600 font-bold">초과 {formatKRW(Math.abs(remaining), hideAmounts)}</span>
+                  {/* 2. 연필 아이콘 클릭하면 입력 필드 열림 */}
+                  {editingAccountId === account.id ? (
+                    <div
+                      className="mt-3 space-y-1.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 font-medium">
+                        <span>예산 설정</span>
+                        <span className="text-indigo-600 font-bold">Enter 저장 / Esc 취소</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            value={editAmountStr}
+                            onChange={(e) => {
+                              const cleanDigits = e.target.value.replace(/[^0-9]/g, '');
+                              setEditAmountStr(cleanDigits);
+                            }}
+                            onKeyDown={(e) => handleAccountInputKeyDown(e, account.id, account.alias)}
+                            onPaste={(e) => {
+                              e.preventDefault();
+                              const pasted = e.clipboardData.getData('text').replace(/[^0-9]/g, '');
+                              setEditAmountStr((prev) => (pasted ? prev + pasted : prev));
+                            }}
+                            placeholder="0"
+                            autoFocus
+                            disabled={isSavingAccount}
+                            className="w-full text-xs font-bold text-slate-900 border-2 border-indigo-500 rounded px-2 py-1 pr-5 focus:outline-none focus:ring-1 focus:ring-indigo-300 bg-white"
+                          />
+                          <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">
+                            원
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => saveAccountBudget(account.id, account.alias)}
+                          disabled={isSavingAccount}
+                          className="p-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded transition shrink-0 cursor-pointer disabled:opacity-50"
+                          title="즉시 저장 (Enter)"
+                        >
+                          <Check className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelAccountEdit}
+                          disabled={isSavingAccount}
+                          className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded transition shrink-0 cursor-pointer"
+                          title="취소 (Esc)"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                      {editAmountStr !== '' && (
+                        <div className="text-[10px] font-semibold text-indigo-600">
+                          {formatKRW(parseInt(editAmountStr, 10) || 0, false)}
+                        </div>
+                      )}
+                    </div>
                   ) : (
-                    <span className="text-slate-500">잔여 {formatKRW(remaining, hideAmounts)}</span>
+                    <div className="mt-3 flex items-baseline justify-between">
+                      <div>
+                        <span className="text-xs text-slate-400 block">지출 실적</span>
+                        <span className="text-base font-bold text-slate-900">{formatKRW(spent, hideAmounts)}</span>
+                      </div>
+                      <div
+                        className="text-right group/budget"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEditAccount(account.id, budgetAmount);
+                        }}
+                        title="클릭하여 예산 설정/수정"
+                      >
+                        <span className="text-xs text-slate-400 block">월 배정 예산</span>
+                        {budgetAmount > 0 ? (
+                          <span className="text-xs font-semibold text-slate-600 group-hover/budget:text-indigo-600 transition">
+                            {formatKRW(budgetAmount, hideAmounts)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-semibold text-slate-400 bg-slate-200/60 group-hover/budget:bg-indigo-50 group-hover/budget:text-indigo-600 px-1.5 py-0.5 rounded transition">
+                            미설정
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Progress Bar */}
+                  <div className="mt-3">
+                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          percent > 100
+                            ? 'bg-rose-500'
+                            : percent > 85
+                            ? 'bg-amber-500'
+                            : 'bg-emerald-500'
+                        }`}
+                        style={{ width: `${Math.min(percent, 100)}%` }}
+                      ></div>
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-slate-700">{percent}% 소진</span>
+                      {percent > 100 ? (
+                        <span className="text-rose-600 font-bold">초과 {formatKRW(Math.abs(remaining), hideAmounts)}</span>
+                      ) : (
+                        <span className="text-slate-500">잔여 {formatKRW(remaining, hideAmounts)}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {isPaceOver && percent <= 100 && (
+                    <div className="mt-2 text-[10px] text-amber-700 bg-amber-100/70 border border-amber-200/80 px-2 py-0.5 rounded flex items-center gap-1">
+                      <Zap className="h-3 w-3 shrink-0" />
+                      <span>지출 페이스가 빠릅니다 (월말 초과 주의)</span>
+                    </div>
                   )}
                 </div>
-              </div>
-
-              {isPaceOver && percent <= 100 && (
-                <div className="mt-2 text-[10px] text-amber-700 bg-amber-100/70 border border-amber-200/80 px-2 py-0.5 rounded flex items-center gap-1">
-                  <Zap className="h-3 w-3 shrink-0" />
-                  <span>지출 페이스가 빠릅니다 (월말 초과 주의)</span>
-                </div>
-              )}
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        )}
+
+        {/* Section 2: Category Budgets (User Request: Show category budgets on dashboard) */}
+        {(budgetTab === 'all' || budgetTab === 'category') && (
+          <div className={`space-y-3 ${budgetTab === 'all' ? 'pt-4 border-t border-slate-100' : ''}`}>
+            {budgetTab === 'all' && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <Tag className="h-3.5 w-3.5 text-indigo-500" />
+                  카테고리별 예산 현황 (상세 지출 관리)
+                </span>
+                <span className="text-[11px] text-slate-400">카드 클릭 시 해당 카테고리 거래 내역으로 이동</span>
+              </div>
+            )}
+
+            {categoryBudgets.length === 0 ? (
+              <div className="p-6 text-center bg-slate-50/60 rounded-xl border border-dashed border-slate-200">
+                <p className="text-xs text-slate-500 mb-2">설정된 카테고리별 예산이 없습니다.</p>
+                {onNavigateToBudget && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToBudget}
+                    className="text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    카테고리 예산 설정하기 <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {categoryBudgets.map((catBg) => (
+                  <div
+                    key={catBg.budget.id}
+                    onClick={() => {
+                      const baseName = catBg.targetName.replace(/\s*\(전체\)|\s*전체$/, '').trim();
+                      onNavigateToTransactions({ category: baseName });
+                    }}
+                    className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/60 hover:bg-white hover:shadow-2xs transition cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 group-hover:text-indigo-600 transition truncate">
+                        <Tag className="h-3 w-3 text-indigo-500 shrink-0" />
+                        <span className="truncate">{catBg.targetName}</span>
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${
+                          catBg.rollover
+                            ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                            : 'bg-slate-200/70 text-slate-600'
+                        }`}
+                      >
+                        {catBg.rollover ? '이월' : '초기화'}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex items-baseline justify-between">
+                      <div>
+                        <span className="text-xs text-slate-400 block">지출 실적</span>
+                        <span className="text-base font-bold text-slate-900">{formatKRW(catBg.spent, hideAmounts)}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-xs text-slate-400 block">월 배정 예산</span>
+                        <span className="text-xs font-semibold text-slate-600">{formatKRW(catBg.budgetAmount, hideAmounts)}</span>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="mt-3">
+                      <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            catBg.percent > 100
+                              ? 'bg-rose-500'
+                              : catBg.percent > 85
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${Math.min(catBg.percent, 100)}%` }}
+                        ></div>
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between text-[11px]">
+                        <span className="font-bold text-slate-700">{catBg.percent}% 소진</span>
+                        {catBg.percent > 100 ? (
+                          <span className="text-rose-600 font-bold">초과 {formatKRW(Math.abs(catBg.remaining), hideAmounts)}</span>
+                        ) : (
+                          <span className="text-slate-500">잔여 {formatKRW(catBg.remaining, hideAmounts)}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {catBg.isPaceOver && (
+                      <div className="mt-2 text-[10px] text-amber-700 bg-amber-100/70 border border-amber-200/80 px-2 py-0.5 rounded flex items-center gap-1">
+                        <Zap className="h-3 w-3 shrink-0" />
+                        <span>지출 페이스 주의</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Row 4: Payroll Breakdown (F-06 급여 입금 상세 분해 및 공제 항목) */}

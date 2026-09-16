@@ -48,7 +48,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
       direction: type === 'income' ? 'in' : 'out',
       type,
       category,
-      memo: memo.trim() || undefined,
+      memo: memo.trim() || '',
       isFixed,
       tags: [],
       isConfirmed: true,

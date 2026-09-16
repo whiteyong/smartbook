@@ -31,6 +31,7 @@ import {
   deleteRule,
   addBudget,
   updateBudget,
+  deleteBudget,
   batchUpdateTransactions,
 } from './services/ledgerService';
 
@@ -131,6 +132,64 @@ export default function App() {
   const handleDeleteTransaction = async (id: string) => {
     setTransactions((prev) => prev.filter((t) => t.id !== id));
     await deleteTransaction(id);
+  };
+
+  // Optimistic Account Updates (Instant UI reactivity on registration / editing)
+  const handleAddAccount = async (newAcc: Omit<Account, 'id'>) => {
+    const created = await addAccount(newAcc);
+    setAccounts((prev) => {
+      const idx = prev.findIndex((a) => a.id === created.id);
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      }
+      return [...prev, created];
+    });
+    return created;
+  };
+
+  const handleUpdateAccount = async (id: string, updates: Partial<Account>) => {
+    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+    await updateAccount(id, updates);
+  };
+
+  const handleDeleteAccount = async (id: string) => {
+    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    await deleteAccount(id);
+  };
+
+  // Optimistic Budget Updates (Instant UI reactivity on budget edit/addition)
+  const handleUpdateBudget = async (id: string, updates: Partial<Budget>) => {
+    setBudgets((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, ...updates } : b))
+    );
+    await updateBudget(id, updates);
+  };
+
+  const handleAddBudget = async (newBudget: Omit<Budget, 'id'>) => {
+    const created = await addBudget(newBudget);
+    setBudgets((prev) => {
+      const idx = prev.findIndex(
+        (b) =>
+          b.id === created.id ||
+          (b.targetType === created.targetType &&
+            b.targetId === created.targetId &&
+            b.month === created.month)
+      );
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = created;
+        return next;
+      }
+      return [...prev, created];
+    });
+    return created;
+  };
+
+  const handleDeleteBudget = async (id: string) => {
+    setBudgets((prev) => prev.filter((b) => b.id !== id));
+    await deleteBudget(id);
   };
 
   // Rule creation promotion from transaction
@@ -291,6 +350,9 @@ export default function App() {
               hideAmounts={hideAmounts}
               onNavigateToTransactions={handleNavigateToTransactions}
               onNavigateToUpload={() => setCurrentTab('upload')}
+              onNavigateToBudget={() => setCurrentTab('budget')}
+              onUpdateBudget={handleUpdateBudget}
+              onAddBudget={handleAddBudget}
             />
           )}
 
@@ -341,8 +403,9 @@ export default function App() {
               budgets={budgets}
               transactions={effectiveTransactions}
               hideAmounts={hideAmounts}
-              onUpdateBudget={updateBudget}
-              onAddBudget={addBudget}
+              onUpdateBudget={handleUpdateBudget}
+              onAddBudget={handleAddBudget}
+              onDeleteBudget={handleDeleteBudget}
             />
           )}
 
@@ -351,9 +414,9 @@ export default function App() {
               accounts={accounts}
               transactions={transactions}
               hideAmounts={hideAmounts}
-              onAddAccount={addAccount}
-              onUpdateAccount={updateAccount}
-              onDeleteAccount={deleteAccount}
+              onAddAccount={handleAddAccount}
+              onUpdateAccount={handleUpdateAccount}
+              onDeleteAccount={handleDeleteAccount}
               onCreateAdjustmentTx={async (accId, diff) => {
                 const targetAcc = accounts.find((a) => a.id === accId);
                 await addTransaction({

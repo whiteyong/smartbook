@@ -210,7 +210,7 @@ export function convertRowsToTransactions(
       tags: [],
       isConfirmed: false,
       isManualLocked: false,
-      memo: memo || undefined,
+      memo: memo || '',
       importBatchId: batchId,
       createdAt: now,
       updatedAt: now,

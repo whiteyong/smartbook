@@ -38,7 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenQuickAdd,
   onOpenUpload,
 }) => {
-  const isAccountsTab = currentTab === 'accounts';
+  const hideTopControls = currentTab === 'accounts' || currentTab === 'budget';
 
   const handlePrevMonth = () => {
     const [year, month] = selectedMonth.split('-').map(Number);
@@ -64,8 +64,8 @@ export const Header: React.FC<HeaderProps> = ({
         <p className="text-xs text-slate-500 hidden sm:block">{description}</p>
       </div>
 
-      {/* Center Month Selector & Account Filter (Hidden in Accounts Tab) */}
-      {!isAccountsTab && (
+      {/* Center Month Selector & Account Filter (Hidden in Accounts & Budget Tabs) */}
+      {!hideTopControls && (
         <div className="flex items-center gap-3">
           {/* Account Selector */}
           <div className="relative">
@@ -108,8 +108,8 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       )}
 
-      {/* Actions (Hidden in Accounts Tab) */}
-      {!isAccountsTab && (
+      {/* Actions (Hidden in Accounts & Budget Tabs) */}
+      {!hideTopControls && (
         <div className="flex items-center gap-2">
           {needsAttentionCount > 0 && (
             <button

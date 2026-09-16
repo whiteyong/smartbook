@@ -86,7 +86,7 @@ export const S4Rules: React.FC<S4RulesProps> = ({
         name,
         condition: {
           direction,
-          keyword: keyword.trim() || undefined,
+          keyword: keyword.trim() || '',
           matchType,
         },
         result: {
@@ -103,7 +103,7 @@ export const S4Rules: React.FC<S4RulesProps> = ({
         priority: maxPriority + 1,
         condition: {
           direction,
-          keyword: keyword.trim() || undefined,
+          keyword: keyword.trim() || '',
           matchType,
         },
         result: {

@@ -356,7 +356,7 @@ export const S2Upload: React.FC<S2UploadProps> = ({
                         <span className="text-xs font-bold text-slate-800">{acc.alias}</span>
                         <span className="text-[10px] text-slate-400">{acc.bankName}</span>
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-500 font-mono">{acc.accountNumber}</div>
+                      <div className="mt-1 text-[11px] text-slate-500 font-mono">{acc.rawAccountNumber || acc.accountNumber}</div>
                       <div className="mt-2 text-xs font-bold text-slate-900">
                         잔액 {formatKRW(acc.currentBalance ?? acc.initialBalance)}
                       </div>

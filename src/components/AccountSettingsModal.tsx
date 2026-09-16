@@ -174,7 +174,7 @@ export const AccountSettingsModal: React.FC<AccountSettingsModalProps> = ({
     const newRole: AccountRoleConfig = {
       id: newId,
       label: trimmed,
-      description: newRoleDesc.trim() || undefined,
+      description: newRoleDesc.trim() || '',
       color: newRoleColor,
     };
 
@@ -218,7 +218,7 @@ export const AccountSettingsModal: React.FC<AccountSettingsModalProps> = ({
         return {
           ...r,
           label: trimmed,
-          description: editRoleDesc.trim() || undefined,
+          description: editRoleDesc.trim() || '',
           color: editRoleColor,
         };
       }
