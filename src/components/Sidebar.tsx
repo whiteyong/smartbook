@@ -20,8 +20,8 @@ interface SidebarProps {
   currentTab: LedgerTab;
   onTabChange: (tab: LedgerTab) => void;
   accounts: Account[];
-  hideAmounts: boolean;
-  onToggleHideAmounts: () => void;
+  hideAmounts?: boolean;
+  onToggleHideAmounts?: () => void;
   needsAttentionCount: number;
 }
 
@@ -75,10 +75,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onTabChange,
   accounts,
-  hideAmounts,
-  onToggleHideAmounts,
   needsAttentionCount,
 }) => {
+  // GNB 보유 자산 합계 전용 금액 숨기기 상태
+  const [hideGnbTotalAssets, setHideGnbTotalAssets] = React.useState<boolean>(false);
+
   // Compute total liquid assets from accounts
   const totalAssets = accounts.reduce(
     (sum, acc) => sum + (acc.currentBalance ?? acc.initialBalance ?? 0),
@@ -114,15 +115,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
               보유 자산 합계
             </span>
             <button
-              onClick={onToggleHideAmounts}
+              onClick={() => setHideGnbTotalAssets((prev) => !prev)}
               className="p-1 hover:text-white rounded text-slate-400 transition"
-              title={hideAmounts ? '금액 보이기' : '금액 숨기기 (공유/보안 모드)'}
+              title={hideGnbTotalAssets ? '보유 자산 금액 보이기' : '보유 자산 금액 숨기기'}
+              aria-label={hideGnbTotalAssets ? '보유 자산 금액 보이기' : '보유 자산 금액 숨기기'}
             >
-              {hideAmounts ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {hideGnbTotalAssets ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
             </button>
           </div>
           <div className="mt-1.5 text-lg font-bold text-white tracking-tight">
-            {formatKRW(totalAssets, hideAmounts)}
+            {formatKRW(totalAssets, hideGnbTotalAssets)}
           </div>
           <div className="text-[10px] text-slate-400 mt-0.5 flex items-center justify-between">
             <span>{accounts.length}개 통장 합산</span>

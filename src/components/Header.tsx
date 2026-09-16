@@ -7,9 +7,10 @@ import {
   AlertTriangle,
   Wallet,
 } from 'lucide-react';
-import { Account } from '../types';
+import { Account, LedgerTab } from '../types';
 
 interface HeaderProps {
+  currentTab?: LedgerTab;
   title: string;
   description: string;
   selectedMonth: string; // YYYY-MM
@@ -24,6 +25,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  currentTab,
   title,
   description,
   selectedMonth,
@@ -36,6 +38,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenQuickAdd,
   onOpenUpload,
 }) => {
+  const isAccountsTab = currentTab === 'accounts';
+
   const handlePrevMonth = () => {
     const [year, month] = selectedMonth.split('-').map(Number);
     const d = new Date(year, month - 2, 1);
@@ -60,77 +64,81 @@ export const Header: React.FC<HeaderProps> = ({
         <p className="text-xs text-slate-500 hidden sm:block">{description}</p>
       </div>
 
-      {/* Center Month Selector & Account Filter */}
-      <div className="flex items-center gap-3">
-        {/* Account Selector */}
-        <div className="relative">
-          <select
-            value={selectedAccountId}
-            onChange={(e) => onSelectAccountId(e.target.value)}
-            className="text-xs font-semibold bg-slate-50 border border-slate-300 text-slate-800 rounded-lg pl-3 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 appearance-none cursor-pointer"
-          >
-            <option value="all">전체 계좌 통합</option>
-            {accounts.map((acc) => (
-              <option key={acc.id} value={acc.id}>
-                {acc.alias} ({acc.bankName})
-              </option>
-            ))}
-          </select>
-          <Wallet className="h-3.5 w-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-        </div>
-
-        {/* Month Selector */}
-        <div className="flex items-center bg-slate-100/90 border border-slate-200/80 rounded-lg p-0.5">
-          <button
-            onClick={handlePrevMonth}
-            className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
-            title="이전 달"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          <div className="px-3 text-xs font-bold text-slate-800 flex items-center gap-1.5">
-            <img src="/icons/10_calendar_today.svg" alt="달력" className="h-3.5 w-3.5 opacity-60" />
-            <span>{selectedMonth.replace('-', '년 ')}월</span>
+      {/* Center Month Selector & Account Filter (Hidden in Accounts Tab) */}
+      {!isAccountsTab && (
+        <div className="flex items-center gap-3">
+          {/* Account Selector */}
+          <div className="relative">
+            <select
+              value={selectedAccountId}
+              onChange={(e) => onSelectAccountId(e.target.value)}
+              className="text-xs font-semibold bg-slate-50 border border-slate-300 text-slate-800 rounded-lg pl-3 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 appearance-none cursor-pointer"
+            >
+              <option value="all">전체 계좌 통합</option>
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.alias} ({acc.bankName})
+                </option>
+              ))}
+            </select>
+            <Wallet className="h-3.5 w-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
+
+          {/* Month Selector */}
+          <div className="flex items-center bg-slate-100/90 border border-slate-200/80 rounded-lg p-0.5">
+            <button
+              onClick={handlePrevMonth}
+              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
+              title="이전 달"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <div className="px-3 text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <img src="/icons/10_calendar_today.svg" alt="달력" className="h-3.5 w-3.5 opacity-60" />
+              <span>{selectedMonth.replace('-', '년 ')}월</span>
+            </div>
+            <button
+              onClick={handleNextMonth}
+              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
+              title="다음 달"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Actions (Hidden in Accounts Tab) */}
+      {!isAccountsTab && (
+        <div className="flex items-center gap-2">
+          {needsAttentionCount > 0 && (
+            <button
+              onClick={onOpenNeedsAttention}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs"
+              title="확인 필요 거래 보기"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+              <span>확인 필요 {needsAttentionCount}건</span>
+            </button>
+          )}
+
           <button
-            onClick={handleNextMonth}
-            className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
-            title="다음 달"
+            onClick={onOpenUpload}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs"
           >
-            <ChevronRight className="h-4 w-4" />
+            <Upload className="h-3.5 w-3.5" />
+            <span>엑셀 업로드</span>
+          </button>
+
+          <button
+            onClick={onOpenQuickAdd}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            <span>수기 등록</span>
           </button>
         </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2">
-        {needsAttentionCount > 0 && (
-          <button
-            onClick={onOpenNeedsAttention}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs"
-            title="확인 필요 거래 보기"
-          >
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-            <span>확인 필요 {needsAttentionCount}건</span>
-          </button>
-        )}
-
-        <button
-          onClick={onOpenUpload}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          <span>엑셀 업로드</span>
-        </button>
-
-        <button
-          onClick={onOpenQuickAdd}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          <span>수기 등록</span>
-        </button>
-      </div>
+      )}
     </header>
   );
 };

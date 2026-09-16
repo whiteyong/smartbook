@@ -16,6 +16,8 @@ import {
   Budget,
   ImportBatch,
   HouseholdInfo,
+  AccountRoleConfig,
+  AccountConfig,
 } from '../types';
 import {
   INITIAL_ACCOUNTS,
@@ -38,6 +40,33 @@ const LS_RULES = 'hl_rules';
 const LS_BUDGETS = 'hl_budgets';
 const LS_BATCHES = 'hl_batches';
 const LS_SETTINGS = 'hl_settings';
+const LS_ACCOUNT_CONFIG = 'hl_account_config';
+
+export const DEFAULT_BANKS: string[] = [
+  'KB국민은행',
+  '신한은행',
+  '우리은행',
+  '하나은행',
+  '카카오뱅크',
+  '토스뱅크',
+  'NH농협은행',
+  'IBK기업은행',
+  'SC제일은행',
+  '우체국',
+  '케이뱅크',
+];
+
+export const DEFAULT_ACCOUNT_ROLES: AccountRoleConfig[] = [
+  { id: 'salary', label: '급여 수신', description: '급여 및 부수입 입금 전용 통장', color: '#6366F1', isDefault: true },
+  { id: 'fixed', label: '고정비', description: '월세/관리비/보험/대출 등 고정 지출 통장', color: '#F59E0B', isDefault: true },
+  { id: 'living', label: '생활비', description: '식비/생필품/교통 등 변동 생활비 (체크카드 연동)', color: '#10B981', isDefault: true },
+  { id: 'savings', label: '저축/비상금', description: '청약/적금/파킹통장/투자 및 비상금 예치', color: '#3B82F6', isDefault: true },
+];
+
+export const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
+  banks: DEFAULT_BANKS,
+  roles: DEFAULT_ACCOUNT_ROLES,
+};
 
 // 1. Initial Seeding Check
 export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
@@ -78,6 +107,7 @@ export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
       hideAmounts: false,
     };
     batch.set(doc(db, SETTINGS_COL, 'general'), defaultSettings);
+    batch.set(doc(db, SETTINGS_COL, 'account_config'), DEFAULT_ACCOUNT_CONFIG);
 
     await batch.commit();
     return true;
@@ -89,7 +119,56 @@ export async function seedInitialLedgerDataIfEmpty(): Promise<boolean> {
       localStorage.setItem(LS_BUDGETS, JSON.stringify(INITIAL_BUDGETS));
       localStorage.setItem(LS_TRANSACTIONS, JSON.stringify(INITIAL_TRANSACTIONS));
     }
+    if (!localStorage.getItem(LS_ACCOUNT_CONFIG)) {
+      localStorage.setItem(LS_ACCOUNT_CONFIG, JSON.stringify(DEFAULT_ACCOUNT_CONFIG));
+    }
     return false;
+  }
+}
+
+// Account Config (Bank names & Account roles) subscription & persistence
+export function subscribeToAccountConfig(callback: (config: AccountConfig) => void): () => void {
+  try {
+    return onSnapshot(
+      doc(db, SETTINGS_COL, 'account_config'),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as Partial<AccountConfig>;
+          const config: AccountConfig = {
+            banks: data.banks && Array.isArray(data.banks) && data.banks.length > 0 ? data.banks : DEFAULT_BANKS,
+            roles: data.roles && Array.isArray(data.roles) && data.roles.length > 0 ? data.roles : DEFAULT_ACCOUNT_ROLES,
+          };
+          localStorage.setItem(LS_ACCOUNT_CONFIG, JSON.stringify(config));
+          callback(config);
+        } else {
+          const local = localStorage.getItem(LS_ACCOUNT_CONFIG);
+          const config = local ? JSON.parse(local) : DEFAULT_ACCOUNT_CONFIG;
+          callback(config);
+        }
+      },
+      () => {
+        const local = localStorage.getItem(LS_ACCOUNT_CONFIG);
+        const config = local ? JSON.parse(local) : DEFAULT_ACCOUNT_CONFIG;
+        callback(config);
+      }
+    );
+  } catch {
+    const local = localStorage.getItem(LS_ACCOUNT_CONFIG);
+    const config = local ? JSON.parse(local) : DEFAULT_ACCOUNT_CONFIG;
+    callback(config);
+    return () => {};
+  }
+}
+
+export async function saveAccountConfig(config: AccountConfig): Promise<void> {
+  localStorage.setItem(LS_ACCOUNT_CONFIG, JSON.stringify(config));
+  try {
+    await setDoc(doc(db, SETTINGS_COL, 'account_config'), {
+      ...config,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Firestore setDoc account_config failed, saved to local storage:', err);
   }
 }
 

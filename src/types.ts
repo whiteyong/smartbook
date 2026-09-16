@@ -1,8 +1,23 @@
 // Household Ledger Data Types according to PRD
 
-export type AccountRole = 'salary' | 'fixed' | 'living' | 'savings';
+export type LedgerTab = 'dashboard' | 'upload' | 'transactions' | 'rules' | 'budget' | 'accounts';
+
+export type AccountRole = 'salary' | 'fixed' | 'living' | 'savings' | string;
 export type TransactionType = 'income' | 'expense' | 'transfer' | 'savings';
 export type Direction = 'in' | 'out';
+
+export interface AccountRoleConfig {
+  id: string;
+  label: string;
+  description?: string;
+  color?: string;
+  isDefault?: boolean;
+}
+
+export interface AccountConfig {
+  banks: string[];
+  roles: AccountRoleConfig[];
+}
 
 export interface Account {
   id: string;
