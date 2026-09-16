@@ -169,7 +169,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
               {CATEGORY_TREE.map((g) => (
                 <optgroup key={g.group} label={g.group}>
                   {g.items.map((it) => (
-                    <option key={it} value={it}>
+                    <option key={`${g.group}-${it}`} value={it}>
                       {it}
                     </option>
                   ))}

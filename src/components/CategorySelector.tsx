@@ -19,6 +19,7 @@ import {
   Coins,
   TrendingUp,
   PlusCircle,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
 
@@ -47,10 +48,12 @@ const EXPENSE_SHORTCUTS = [
 // Quick shortcuts for INCOMES (수입 빠른 분류)
 const INCOME_SHORTCUTS = [
   { label: '급여', category: '수입 > 급여', icon: Wallet },
-  { label: '상여/성과급', category: '수입 > 상여/성과급', icon: Coins },
+  { label: '상여금', category: '수입 > 상여금', icon: Coins },
+  { label: '성과급', category: '수입 > 성과급', icon: Coins },
   { label: '금융/배당', category: '수입 > 금융소득/배당', icon: TrendingUp },
   { label: '부수입/당근', category: '수입 > 부수입/당근', icon: ShoppingBag },
   { label: '기타수입', category: '수입 > 기타수입', icon: PlusCircle },
+  { label: '통장간이체', category: '이체 > 통장간이체', icon: ArrowLeftRight },
 ];
 
 export const CategorySelector: React.FC<CategorySelectorProps> = ({
@@ -481,7 +484,7 @@ export const CategorySelector: React.FC<CategorySelectorProps> = ({
                             }`}
                           >
                             <div className="truncate min-w-0 pr-1">
-                              {!isIncomeDirection && (
+                              {(!isIncomeDirection || mainTitle !== '수입') && mainTitle && (
                                 <span
                                   className={`text-[10px] font-normal mr-1 block ${
                                     isSelected ? 'text-indigo-500' : 'text-slate-400'

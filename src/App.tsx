@@ -92,12 +92,16 @@ export default function App() {
     return transactions.filter((t) => t.accountId === selectedAccountId);
   }, [transactions, selectedAccountId]);
 
-  // Needs Attention Count (미분류 거래)
+  // Needs Attention Count (미분류 거래 및 연결 필요 이체)
   const needsAttentionCount = useMemo(() => {
     return transactions.filter(
       (t) =>
         t.occurredAt.startsWith(selectedMonth) &&
-        (t.category === '미분류' || !t.isConfirmed)
+        (t.category === '미분류' ||
+          !t.isConfirmed ||
+          ((t.type === 'transfer' || t.category.startsWith('이체')) &&
+            !t.transfer_link_id &&
+            !t.transferPairId))
     ).length;
   }, [transactions, selectedMonth]);
 

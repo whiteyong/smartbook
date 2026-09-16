@@ -505,15 +505,25 @@ export function detectTransfers(
       });
 
       if (matchIn) {
-        // Pair them as transfer!
+        // Link them as transfer!
+        const linkId = `link_${outTx.id}_${matchIn.id}`;
+
         outTx.type = 'transfer';
         outTx.category = '이체 > 통장간이체';
+        outTx.transfer_link_id = linkId;
+        outTx.transfer_role = 'from';
+        outTx.is_auto_linked = true;
+        outTx.isConfirmed = true;
         outTx.transferPairId = matchIn.id;
         outTx.transferAccountAlias = matchIn.accountAlias;
         outTx.tags = Array.from(new Set([...outTx.tags, '내통장이체']));
 
         matchIn.type = 'transfer';
         matchIn.category = '이체 > 통장간이체';
+        matchIn.transfer_link_id = linkId;
+        matchIn.transfer_role = 'to';
+        matchIn.is_auto_linked = true;
+        matchIn.isConfirmed = true;
         matchIn.transferPairId = outTx.id;
         matchIn.transferAccountAlias = outTx.accountAlias;
         matchIn.tags = Array.from(new Set([...matchIn.tags, '내통장이체']));

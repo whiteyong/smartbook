@@ -61,6 +61,11 @@ export interface Transaction {
   isManualLocked: boolean; // 수동 수정 잠금
   memo?: string;
   transferPairId?: string; // 이체 매칭 상대 거래 ID
+  transfer_link_id?: string; // 이체 연결 고유 ID (from/to 거래가 동일 ID 공유)
+  transfer_role?: 'from' | 'to'; // 보낸 통장 = from, 받은 통장 = to
+  is_auto_linked?: boolean; // 자동 감지된 이체 여부
+  transfer_unlinked_allowed?: boolean; // 상대편 없이 이체로 둔 경우 (연결 필요 상태로 저장 허용)
+  previousCategoryBeforeTransfer?: string; // 이체로 변경 전 카테고리 (되돌리기용)
   transferAccountAlias?: string; // 이체 상대 계좌명
   receiptUrl?: string; // 영수증 증빙 이미지 경로 또는 dataUri
   attachments?: TransactionAttachment[]; // 거래별 증빙 첨부파일
