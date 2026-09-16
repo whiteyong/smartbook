@@ -10,7 +10,6 @@ import {
   FileSpreadsheet,
   Coins,
   Sparkles,
-  CheckCircle2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -64,16 +63,7 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
   const totalExpense = expenseTxs.reduce((sum, t) => sum + t.amount, 0);
   const netBalance = totalIncome - totalExpense;
 
-  // 전월 대비 계산
   const [currYear, currMonthNum] = selectedMonth.split('-').map(Number);
-  const prevDate = new Date(currYear, currMonthNum - 2, 1);
-  const prevMonthStr = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
-  const prevMonthTxs = transactions.filter((t) => t.occurredAt.startsWith(prevMonthStr));
-  const prevIncome = prevMonthTxs.filter((t) => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-  const prevExpense = prevMonthTxs.filter((t) => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-
-  const expenseChangeRate = prevExpense > 0 ? ((totalExpense - prevExpense) / prevExpense) * 100 : 0;
-  const incomeChangeRate = prevIncome > 0 ? ((totalIncome - prevIncome) / prevIncome) * 100 : 0;
 
   // 2. 고정비 vs 변동비 분석
   const fixedExpense = expenseTxs.filter((t) => t.isFixed).reduce((sum, t) => sum + t.amount, 0);
@@ -234,11 +224,12 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
 
   const taxesTotal = aggregatedDeductions.incomeTax + aggregatedDeductions.localTax;
 
-  // 연간 누적 (해당 연도 기준)
-  const [selectedYear] = selectedMonth.split('-');
+  // 연간 누적 (해당 연도 1월 ~ 선택한 월 누적 기준)
+  const [selectedYear, selectedMonthNum] = selectedMonth.split('-');
   const yearSalaryTxs = transactions.filter(
     (t) =>
       t.occurredAt.startsWith(selectedYear) &&
+      t.occurredAt.slice(0, 7) <= selectedMonth &&
       (t.category.includes('급여') || t.category.includes('상여') || t.category.includes('성과')) &&
       t.payslip &&
       t.payslip.length > 0
@@ -311,14 +302,6 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
               <TrendingUp className="h-4 w-4 text-emerald-500" />
               이달 총 수입
             </span>
-            <span
-              className={`text-[11px] font-semibold flex items-center gap-0.5 ${
-                incomeChangeRate >= 0 ? 'text-emerald-600' : 'text-rose-600'
-              }`}
-            >
-              {incomeChangeRate >= 0 ? '+' : ''}
-              {incomeChangeRate.toFixed(1)}% vs 전월
-            </span>
           </div>
           <div className="mt-3 text-2xl font-bold text-slate-900 tracking-tight">
             {formatKRW(totalIncome, hideAmounts)}
@@ -340,14 +323,6 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
             <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5">
               <TrendingDown className="h-4 w-4 text-rose-500" />
               이달 총 지출 (이체 제외)
-            </span>
-            <span
-              className={`text-[11px] font-semibold flex items-center gap-0.5 ${
-                expenseChangeRate <= 0 ? 'text-emerald-600' : 'text-rose-600'
-              }`}
-            >
-              {expenseChangeRate >= 0 ? '+' : ''}
-              {expenseChangeRate.toFixed(1)}% vs 전월
             </span>
           </div>
           <div className="mt-3 text-2xl font-bold text-slate-900 tracking-tight">
@@ -581,11 +556,6 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
                 <h3 className="text-base font-bold text-white tracking-tight">
                   급여명세서 공제 항목 분해
                 </h3>
-                {salaryTxs.length > 0 && (
-                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                    {salaryTxs.length}건 분해 집계
-                  </span>
-                )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
                 4대보험 · 소득세는 가계 지출과 이중 계상되지 않으며 급여 공제로 별도 집계됩니다
@@ -630,12 +600,9 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
                   <span className="text-xs font-bold text-slate-300">
-                    지급 항목 (기본급 → 성과급 · 상여금 → 비과세 식대)
+                    지급 항목
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-emerald-400">
-                  지급 합계 {formatKRW(totalPayslipGross, hideAmounts)}
-                </span>
               </div>
 
               {/* Grid: 기본급 -> 성과급(있을시) -> 상여금(있을시) -> 비과세 식대 -> 기타 수당 */}
@@ -721,21 +688,18 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
               </div>
             </div>
 
-            {/* Section 2: 공제 항목 분해 (각 공제 항목 별로 금액 표시) */}
+            {/* Section 2: 공제 항목 */}
             <div>
               <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-2">
                   <span className="h-2 w-2 rounded-full bg-rose-400"></span>
                   <span className="text-xs font-bold text-slate-300">
-                    급여명세서 공제 항목 분해 (각 공제 항목별 금액)
+                    공제 항목
                   </span>
                   <span className="text-[11px] text-slate-400">
                     · 4대보험 {formatKRW(fourInsurancesTotal, hideAmounts)} + 세액 {formatKRW(taxesTotal, hideAmounts)}
                   </span>
                 </div>
-                <span className="text-xs font-semibold text-rose-400">
-                  공제 합계 -{formatKRW(totalPayslipDeduct, hideAmounts)}
-                </span>
               </div>
 
               {/* Grid: 국민연금, 건강보험, 장기요양보험, 고용보험, 소득세, 지방소득세, 기타공제 */}
@@ -835,17 +799,10 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
               </div>
             </div>
 
-            {/* Section 3: 연간 누적 및 검증 요약 (PRD F-06) */}
-            <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2 text-slate-300">
-                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                <span>
-                  검증 완료: 지급 합계({formatKRW(totalPayslipGross, hideAmounts)}) - 공제 합계({formatKRW(totalPayslipDeduct, hideAmounts)}) = 통장 입금액({formatKRW(totalPayslipNet, hideAmounts)})
-                </span>
-              </div>
-
-              <div className="flex items-center gap-4 text-slate-400 text-[11px]">
-                <span className="text-slate-300 font-medium">연간 누적 현황:</span>
+            {/* Section 3: 연간 누적 현황 */}
+            <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-3 text-xs">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-400 text-[11px]">
+                <span className="text-slate-300 font-semibold">연간 누적 현황 (1월~{Number(selectedMonthNum)}월):</span>
                 <span>실수령 <strong className="text-white">{formatKRW(yearCumulativeNet, hideAmounts)}</strong></span>
                 <span>· 4대보험 <strong className="text-white">{formatKRW(yearCumulativeInsurance, hideAmounts)}</strong></span>
                 <span>· 원천세액 <strong className="text-white">{formatKRW(yearCumulativeTax, hideAmounts)}</strong></span>

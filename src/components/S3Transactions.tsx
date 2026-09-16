@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search,
   Filter,
@@ -20,6 +21,7 @@ import {
   Download,
   Edit3,
   ChevronRight,
+  ChevronDown,
   ArrowUp,
   ArrowDown,
   CornerDownLeft,
@@ -82,6 +84,30 @@ const findTransferCandidates = (
       const diffB = Math.abs(activeTime - candTimeB);
       return diffA - diffB;
     });
+};
+
+// Helper to check if a transaction belongs to a selected 1depth category group
+const isTxInDepth1Category = (txCategory: string, selectedDepth1: string): boolean => {
+  if (!selectedDepth1 || selectedDepth1 === 'all') return true;
+
+  const group = CATEGORY_TREE.find((g) => g.group === selectedDepth1);
+  if (!group) {
+    return txCategory.startsWith(selectedDepth1) || txCategory === selectedDepth1;
+  }
+
+  // 1. Exact match in group items
+  if (group.items.includes(txCategory)) return true;
+
+  // 2. Check by main prefix of any item in group (e.g. '주거/관리비' for '주거/통신')
+  const prefixes = group.items.map((item) => item.split('>')[0].trim());
+  const txPrefix = txCategory.split('>')[0].trim();
+  if (prefixes.some((p) => txPrefix.startsWith(p) || p.startsWith(txPrefix))) {
+    return true;
+  }
+
+  // 3. Fallback: group keywords (e.g. "주거", "통신" in "주거/통신")
+  const keywords = group.group.split('/');
+  return keywords.some((k) => txCategory.includes(k));
 };
 
 export const S3Transactions: React.FC<S3TransactionsProps> = ({
@@ -170,6 +196,178 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     txB: Transaction | null;
   } | null>(null);
   const disconnectToastTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 태그 컬럼 직접 생성 및 편집 팝오버 상태
+  const [tagPopoverTxId, setTagPopoverTxId] = useState<string | null>(null);
+  const [tagPopoverPos, setTagPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [tagInputVal, setTagInputVal] = useState<string>('');
+  const tagPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  // 상단 카테고리 1depth 선택 레이어 상태
+  const [isCategoryLayerOpen, setIsCategoryLayerOpen] = useState(false);
+  const categoryLayerRef = useRef<HTMLDivElement | null>(null);
+  const categoryBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // 일괄 태그 추가 상태
+  const [isBatchTagOpen, setIsBatchTagOpen] = useState(false);
+  const [batchTagVal, setBatchTagVal] = useState('');
+  const [deletedGlobalTags, setDeletedGlobalTags] = useState<Set<string>>(new Set());
+
+  // 전체 거래에서 사용 중인 고유 태그 목록 (추천용)
+  const allExistingTags = useMemo(() => {
+    const set = new Set<string>();
+    transactions.forEach((tx) => {
+      (tx.tags || []).forEach((tag) => {
+        const trimmed = tag ? tag.trim() : '';
+        if (trimmed && !deletedGlobalTags.has(trimmed)) {
+          set.add(trimmed);
+        }
+      });
+    });
+    return Array.from(set);
+  }, [transactions, deletedGlobalTags]);
+
+  // 1depth 카테고리별 거래 내역 건수 집계
+  const depth1Counts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: transactions.length,
+    };
+    CATEGORY_TREE.forEach((g) => {
+      counts[g.group] = transactions.filter((t) => isTxInDepth1Category(t.category, g.group)).length;
+    });
+    return counts;
+  }, [transactions]);
+
+  // 카테고리 1depth 레이어 외부 클릭 및 ESC 닫기
+  useEffect(() => {
+    if (!isCategoryLayerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        categoryLayerRef.current &&
+        !categoryLayerRef.current.contains(e.target as Node) &&
+        categoryBtnRef.current &&
+        !categoryBtnRef.current.contains(e.target as Node)
+      ) {
+        setIsCategoryLayerOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsCategoryLayerOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isCategoryLayerOpen]);
+
+  // 태그 팝오버 외부 클릭 및 ESC 닫기
+  useEffect(() => {
+    if (!tagPopoverTxId) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (tagPopoverRef.current && !tagPopoverRef.current.contains(e.target as Node)) {
+        setTagPopoverTxId(null);
+        setTagInputVal('');
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setTagPopoverTxId(null);
+        setTagInputVal('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [tagPopoverTxId]);
+
+  const handleOpenTagPopover = (e: React.MouseEvent, txId: string) => {
+    e.stopPropagation();
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const popoverWidth = 270;
+    let left = rect.left + rect.width / 2 - popoverWidth / 2;
+    if (left + popoverWidth > window.innerWidth - 16) {
+      left = window.innerWidth - popoverWidth - 16;
+    }
+    if (left < 16) left = 16;
+
+    let top = rect.bottom + 6;
+    if (top + 280 > window.innerHeight && rect.top > 280) {
+      top = rect.top - 280;
+    }
+
+    setTagPopoverPos({ top, left });
+    setTagPopoverTxId(txId);
+    setTagInputVal('');
+  };
+
+  const handleAddTagToTx = async (txId: string, tagToAdd: string) => {
+    const cleaned = tagToAdd.trim().replace(/^#/, '');
+    if (!cleaned) return;
+    setDeletedGlobalTags((prev) => {
+      if (prev.has(cleaned)) {
+        const next = new Set(prev);
+        next.delete(cleaned);
+        return next;
+      }
+      return prev;
+    });
+    const targetTx = transactions.find((t) => t.id === txId);
+    if (!targetTx) return;
+    const currentTags = targetTx.tags || [];
+    if (currentTags.includes(cleaned)) {
+      setTagInputVal('');
+      return;
+    }
+    const newTags = [...currentTags, cleaned];
+    await onUpdateTransaction(txId, { tags: newTags });
+    setTagInputVal('');
+  };
+
+  const handleRemoveTagFromTx = async (txId: string, tagToRemove: string) => {
+    const targetTx = transactions.find((t) => t.id === txId);
+    if (!targetTx) return;
+    const newTags = (targetTx.tags || []).filter((t) => t !== tagToRemove);
+    await onUpdateTransaction(txId, { tags: newTags });
+  };
+
+  // '기존 태그에서 선택'에서 X 클릭 시 해당 태그를 전체 거래 내역에서 삭제
+  const handleDeleteTagGlobally = async (tagToDelete: string) => {
+    setDeletedGlobalTags((prev) => new Set(prev).add(tagToDelete));
+    const txsWithTag = transactions.filter((t) => (t.tags || []).includes(tagToDelete));
+    for (const tx of txsWithTag) {
+      const newTags = (tx.tags || []).filter((t) => t !== tagToDelete);
+      await onUpdateTransaction(tx.id, { tags: newTags });
+    }
+  };
+
+  const handleBatchAddTag = async (tagToAdd: string) => {
+    const cleaned = tagToAdd.trim().replace(/^#/, '');
+    if (!cleaned || selectedIds.size === 0) return;
+    setDeletedGlobalTags((prev) => {
+      if (prev.has(cleaned)) {
+        const next = new Set(prev);
+        next.delete(cleaned);
+        return next;
+      }
+      return prev;
+    });
+    for (const id of Array.from(selectedIds)) {
+      const tx = transactions.find((t) => t.id === id);
+      if (tx) {
+        const cur = tx.tags || [];
+        if (!cur.includes(cleaned)) {
+          await onUpdateTransaction(id, { tags: [...cur, cleaned] });
+        }
+      }
+    }
+    setBatchTagVal('');
+    setIsBatchTagOpen(false);
+  };
 
   // Helper to get effective attachments taking pending uncommitted deletion into account
   const getEffectiveAttachments = useCallback(
@@ -1121,7 +1319,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           <div className="relative w-48">
             <input
               type="text"
-              placeholder="거래처, 적요, 메모 검색..."
+              placeholder="거래처, 적요, 메모, 태그 검색..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 outline-none"
@@ -1222,7 +1420,8 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
             <div className="w-28">통장</div>
             <div className="flex-1">거래처 / 적요 원문</div>
             <div className="w-28 text-right">금액(원)</div>
-            <div className="w-36 text-center">카테고리</div>
+            <div className="w-32 text-center">카테고리</div>
+            <div className="w-40 text-center">태그</div>
             <div className="w-16 text-center">증빙</div>
             <div className="w-16 text-center">상태</div>
           </div>
@@ -1355,7 +1554,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                     </div>
 
                     {/* Category */}
-                    <div className="w-36 px-2 text-center">
+                    <div className="w-32 px-2 text-center">
                       <span
                         className={`inline-block max-w-full truncate text-[11px] px-2 py-0.5 rounded-md font-semibold ${
                           isUnclassified
@@ -1367,6 +1566,55 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                       >
                         {tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
                       </span>
+                    </div>
+
+                    {/* Tags */}
+                    <div
+                      onClick={(e) => handleOpenTagPopover(e, tx.id)}
+                      className="w-40 px-2 py-0.5 flex items-center justify-center cursor-pointer hover:bg-indigo-50/40 rounded transition min-h-[32px] group/tagcell"
+                      title="클릭하여 태그 관리 및 추가"
+                    >
+                      {tx.tags && tx.tags.length > 0 ? (
+                        <div className="flex flex-col items-center gap-1 justify-center max-w-full">
+                          {tx.tags.slice(0, 2).map((t, idx) => {
+                            const isSecond = idx === 1;
+                            const hasMore = tx.tags.length > 2;
+                            return (
+                              <div key={t} className="flex items-center gap-1 max-w-full">
+                                <span
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50/90 text-indigo-700 border border-indigo-200/60 rounded text-[10px] font-medium max-w-[110px] truncate"
+                                  title={`#${t}`}
+                                >
+                                  <span className="truncate">#{t}</span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveTagFromTx(tx.id, t);
+                                    }}
+                                    className="text-indigo-400 hover:text-rose-600 ml-0.5 transition shrink-0"
+                                    title="태그 삭제"
+                                  >
+                                    <X className="h-2.5 w-2.5" />
+                                  </button>
+                                </span>
+                                {isSecond && hasMore && (
+                                  <span
+                                    className="text-[9px] px-1 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-semibold shrink-0"
+                                    title={tx.tags.slice(2).map((rem) => `#${rem}`).join(', ')}
+                                  >
+                                    +{tx.tags.length - 2}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-slate-300 group-hover/tagcell:text-indigo-500 transition select-none">
+                          —
+                        </span>
+                      )}
                     </div>
 
                     {/* Receipt */}
@@ -1428,6 +1676,75 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                   align="left"
                   size="sm"
                 />
+                <span className="text-slate-400">|</span>
+                {/* 일괄 태그 추가 */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsBatchTagOpen(!isBatchTagOpen)}
+                    className="px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg flex items-center gap-1.5 transition"
+                  >
+                    <Tag className="h-3 w-3 text-indigo-400" />
+                    <span>일괄 태그 지정</span>
+                  </button>
+                  {isBatchTagOpen && (
+                    <div className="absolute left-0 bottom-full mb-2 bg-slate-800 border border-slate-700 rounded-xl p-3 shadow-2xl w-64 z-50 animate-in fade-in zoom-in-95">
+                      <div className="text-xs font-semibold text-slate-200 mb-2 flex items-center justify-between">
+                        <span>선택 {selectedIds.size}건에 태그 추가</span>
+                        <button
+                          type="button"
+                          onClick={() => setIsBatchTagOpen(false)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleBatchAddTag(batchTagVal);
+                        }}
+                        className="flex items-center gap-1.5"
+                      >
+                        <div className="relative flex-1">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs">#</span>
+                          <input
+                            type="text"
+                            autoFocus
+                            value={batchTagVal}
+                            onChange={(e) => setBatchTagVal(e.target.value)}
+                            placeholder="태그 입력..."
+                            className="w-full pl-5 pr-2 py-1 text-xs bg-slate-900 border border-slate-700 rounded-md text-white outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={!batchTagVal.trim()}
+                          className="px-2 py-1 text-xs bg-indigo-600 text-white rounded-md font-semibold hover:bg-indigo-500 disabled:opacity-40"
+                        >
+                          적용
+                        </button>
+                      </form>
+                      {allExistingTags.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-slate-700/60">
+                          <div className="text-[10px] text-slate-400 mb-1">기존 태그 선택:</div>
+                          <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                            {allExistingTags.slice(0, 8).map((tag) => (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => handleBatchAddTag(tag)}
+                                className="text-[10px] px-1.5 py-0.5 bg-slate-700/80 hover:bg-indigo-600 text-slate-200 rounded transition"
+                              >
+                                #{tag}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -2154,6 +2471,29 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                     />
                   </div>
 
+                  {/* 기존 태그 추천 칩 */}
+                  {allExistingTags.filter((t) => !(activeTx.tags || []).includes(t)).length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-[10px] text-slate-400 font-medium">추천:</span>
+                      {allExistingTags
+                        .filter((t) => !(activeTx.tags || []).includes(t))
+                        .slice(0, 6)
+                        .map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => {
+                              const newTags = [...(activeTx.tags || []), tag];
+                              onUpdateTransaction(activeTx.id, { tags: newTags });
+                            }}
+                            className="text-[10px] px-1.5 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded transition border border-transparent hover:border-indigo-200 font-medium"
+                          >
+                            #{tag}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+
                   {/* 메모 입력창 */}
                   <textarea
                     rows={2}
@@ -2698,6 +3038,128 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           onSave={handleSavePayslip}
         />
       )}
+      {/* Floating Tag Creation & Management Popover Portal */}
+      {tagPopoverTxId && (() => {
+        const activePopTx = transactions.find((t) => t.id === tagPopoverTxId);
+        if (!activePopTx) return null;
+        const currentTags = activePopTx.tags || [];
+        const unusedExistingTags = allExistingTags.filter((t) => !currentTags.includes(t));
+
+        return createPortal(
+          <div
+            ref={tagPopoverRef}
+            className="fixed bg-white border border-slate-200 rounded-xl shadow-2xl z-[9999] w-68 p-3.5 flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-100"
+            style={{
+              top: `${tagPopoverPos.top}px`,
+              left: `${tagPopoverPos.left}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Tag className="h-3.5 w-3.5 text-indigo-600" />
+                <span>태그 직접 생성 및 설정</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setTagPopoverTxId(null)}
+                className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {/* Current tags in this transaction */}
+            {currentTags.length > 0 ? (
+              <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto py-0.5">
+                {currentTags.map((t) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200/70 rounded-md text-[11px] font-medium"
+                  >
+                    #{t}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTagFromTx(activePopTx.id, t)}
+                      className="text-indigo-400 hover:text-rose-600 ml-0.5 transition"
+                      title="태그 삭제"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[11px] text-slate-400 py-0.5">등록된 태그가 없습니다. 아래에서 새 태그를 생성하세요.</div>
+            )}
+
+            {/* Input to create a new tag directly */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (tagInputVal.trim()) {
+                  handleAddTagToTx(activePopTx.id, tagInputVal);
+                }
+              }}
+              className="flex items-center gap-1.5"
+            >
+              <div className="relative flex-1">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">#</span>
+                <input
+                  type="text"
+                  autoFocus
+                  value={tagInputVal}
+                  onChange={(e) => setTagInputVal(e.target.value)}
+                  placeholder="새 태그명 입력..."
+                  className="w-full pl-6 pr-2 py-1 text-xs bg-slate-50 border border-slate-200 focus:border-indigo-500 rounded-lg outline-none font-medium text-slate-800"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!tagInputVal.trim()}
+                className="px-2.5 py-1 text-xs font-semibold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0 flex items-center gap-1 transition"
+              >
+                <Plus className="h-3 w-3" />
+                생성
+              </button>
+            </form>
+
+            {/* Suggested existing tags from other transactions */}
+            {unusedExistingTags.length > 0 && (
+              <div className="pt-2 border-t border-slate-100">
+                <div className="text-[10px] font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
+                  <span>기존 태그에서 선택</span>
+                  <span>{unusedExistingTags.length}개</span>
+                </div>
+                <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-0.5">
+                  {unusedExistingTags.map((tag) => (
+                    <span
+                      key={tag}
+                      onClick={() => handleAddTagToTx(activePopTx.id, tag)}
+                      className="inline-flex items-center gap-1 text-[10px] pl-1.5 pr-1 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded cursor-pointer transition border border-transparent hover:border-indigo-200 font-medium group/tagbadge"
+                      title={`클릭하여 #${tag} 추가`}
+                    >
+                      <span className="truncate max-w-[90px]">#{tag}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteTagGlobally(tag);
+                        }}
+                        className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+                        title="기존 태그 삭제"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>,
+          document.body
+        );
+      })()}
     </div>
   );
 };
