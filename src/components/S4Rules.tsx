@@ -2,8 +2,6 @@ import React, { useState, useMemo } from 'react';
 import {
   Sparkles,
   Plus,
-  ArrowUp,
-  ArrowDown,
   Trash2,
   Check,
   Zap,
@@ -12,6 +10,7 @@ import {
   Layers,
   X,
   AlertTriangle,
+  GripVertical,
 } from 'lucide-react';
 import { ClassificationRule, Transaction, Account } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
@@ -128,18 +127,76 @@ export const S4Rules: React.FC<S4RulesProps> = ({
     setIsModalOpen(false);
   };
 
-  // Move priority up or down
-  const handleMovePriority = async (ruleId: string, dir: 'up' | 'down') => {
-    const currentList = [...sortedRules];
-    const idx = currentList.findIndex((r) => r.id === ruleId);
-    if (idx === -1) return;
-    if (dir === 'up' && idx === 0) return;
-    if (dir === 'down' && idx === currentList.length - 1) return;
+  // Drag & drop state for reordering rules
+  const [draggedRuleId, setDraggedRuleId] = useState<string | null>(null);
+  // dropIndicator: { index: number, position: 'top' | 'bottom' }
+  const [dropIndicator, setDropIndicator] = useState<{ index: number; position: 'top' | 'bottom' } | null>(null);
+  // Just dropped rule ID for settle animation
+  const [justDroppedId, setJustDroppedId] = useState<string | null>(null);
 
-    const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
-    const temp = currentList[idx];
-    currentList[idx] = currentList[targetIdx];
-    currentList[targetIdx] = temp;
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    setDraggedRuleId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+
+    // Create custom ghost drag image with slight opacity and shadow if supported
+    const rowEl = (e.currentTarget as HTMLElement);
+    if (e.dataTransfer.setDragImage && rowEl) {
+      // Allow browser to use the card with native ghosting
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Calculate whether mouse is on upper half or lower half of row
+    const targetRect = e.currentTarget.getBoundingClientRect();
+    const offsetY = e.clientY - targetRect.top;
+    const position = offsetY < targetRect.height / 2 ? 'top' : 'bottom';
+
+    if (
+      !dropIndicator ||
+      dropIndicator.index !== targetIndex ||
+      dropIndicator.position !== position
+    ) {
+      setDropIndicator({ index: targetIndex, position });
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    const indicator = dropIndicator;
+    setDropIndicator(null);
+    const sourceId = draggedRuleId || e.dataTransfer.getData('text/plain');
+    setDraggedRuleId(null);
+    if (!sourceId) return;
+
+    const sourceIndex = sortedRules.findIndex((r) => r.id === sourceId);
+    if (sourceIndex === -1) return;
+
+    // Calculate final target insertion index based on 'top' or 'bottom'
+    let insertIndex = targetIndex;
+    if (indicator && indicator.position === 'bottom') {
+      insertIndex = targetIndex + 1;
+    }
+
+    // Adjust insertIndex if moving down past itself
+    if (sourceIndex < insertIndex) {
+      insertIndex -= 1;
+    }
+
+    if (sourceIndex === insertIndex) return;
+
+    const currentList = [...sortedRules];
+    const [movedItem] = currentList.splice(sourceIndex, 1);
+    currentList.splice(insertIndex, 0, movedItem);
+
+    // Trigger settle animation on dropped item
+    setJustDroppedId(sourceId);
+    setTimeout(() => {
+      setJustDroppedId(null);
+    }, 1200);
 
     // Normalize priorities sequentially 1..N
     const reordered = currentList.map((r, i) => ({
@@ -150,9 +207,15 @@ export const S4Rules: React.FC<S4RulesProps> = ({
     if (onReorderRules) {
       await onReorderRules(reordered);
     } else {
-      await onUpdateRule(currentList[idx].id, { priority: idx + 1 });
-      await onUpdateRule(currentList[targetIdx].id, { priority: targetIdx + 1 });
+      for (let i = 0; i < currentList.length; i++) {
+        await onUpdateRule(currentList[i].id, { priority: i + 1 });
+      }
     }
+  };
+
+  const handleDragEnd = () => {
+    setDraggedRuleId(null);
+    setDropIndicator(null);
   };
 
   // Past Transactions Re-Apply (과거 거래 재적용)
@@ -235,36 +298,64 @@ export const S4Rules: React.FC<S4RulesProps> = ({
           <div className="p-8 text-center text-xs text-slate-400">등록된 자동 분류 규칙이 없습니다.</div>
         ) : (
           sortedRules.map((rule, idx) => {
+            const isDragging = draggedRuleId === rule.id;
+            const isJustDropped = justDroppedId === rule.id;
+            const showTopIndicator =
+              dropIndicator?.index === idx &&
+              dropIndicator?.position === 'top' &&
+              draggedRuleId !== rule.id;
+            const showBottomIndicator =
+              dropIndicator?.index === idx &&
+              dropIndicator?.position === 'bottom' &&
+              draggedRuleId !== rule.id;
+
             return (
               <div
                 key={rule.id}
-                className={`p-4 flex items-center justify-between text-xs hover:bg-slate-50/80 transition ${
+                draggable
+                onDragStart={(e) => handleDragStart(e, rule.id)}
+                onDragOver={(e) => handleDragOver(e, idx)}
+                onDrop={(e) => handleDrop(e, idx)}
+                onDragEnd={handleDragEnd}
+                className={`relative p-4 flex items-center justify-between text-xs transition-all duration-300 ease-out cursor-grab active:cursor-grabbing ${
                   !rule.isActive ? 'opacity-50' : ''
+                } ${
+                  isDragging
+                    ? 'bg-slate-50/80 border-2 border-dashed border-slate-300 shadow-inner rounded-xl my-1 opacity-60'
+                    : isJustDropped
+                    ? 'bg-indigo-50/80 shadow-md ring-2 ring-indigo-500/40 rounded-xl scale-[1.005]'
+                    : 'hover:bg-slate-50/80'
                 }`}
               >
-                {/* Priority & Move */}
+                {/* Drop Indicator - Top Line */}
+                {showTopIndicator && (
+                  <div className="absolute -top-1 left-2 right-2 h-1 bg-indigo-600 rounded-full z-20 shadow-sm pointer-events-none animate-pulse flex items-center">
+                    <div className="absolute -left-1.5 w-3 h-3 rounded-full bg-indigo-600 ring-2 ring-white" />
+                    <div className="absolute -right-1.5 w-3 h-3 rounded-full bg-indigo-600 ring-2 ring-white" />
+                  </div>
+                )}
+
+                {/* Drop Indicator - Bottom Line */}
+                {showBottomIndicator && (
+                  <div className="absolute -bottom-1 left-2 right-2 h-1 bg-indigo-600 rounded-full z-20 shadow-sm pointer-events-none animate-pulse flex items-center">
+                    <div className="absolute -left-1.5 w-3 h-3 rounded-full bg-indigo-600 ring-2 ring-white" />
+                    <div className="absolute -right-1.5 w-3 h-3 rounded-full bg-indigo-600 ring-2 ring-white" />
+                  </div>
+                )}
+
+                {/* Drag Handle, Priority Number & Rule Info */}
                 <div className="flex items-center gap-3">
-                  <div className="flex flex-col items-center">
-                    <button
-                      onClick={() => handleMovePriority(rule.id, 'up')}
-                      disabled={idx === 0}
-                      className="p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </button>
-                    <span className="text-[11px] font-mono font-bold text-slate-400">#{idx + 1}</span>
-                    <button
-                      onClick={() => handleMovePriority(rule.id, 'down')}
-                      disabled={idx === sortedRules.length - 1}
-                      className="p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </button>
+                  <div className="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 select-none">
+                    <GripVertical className={`h-4 w-4 shrink-0 transition-colors ${isDragging ? 'text-indigo-400' : 'text-slate-300 hover:text-slate-600'}`} />
+                    <span className={`text-[11px] font-mono font-bold ${isDragging ? 'text-slate-300' : 'text-slate-500'}`}>#{idx + 1}</span>
                   </div>
 
                   <div>
                     <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                      <span>{rule.name}</span>
+                      <span className={isDragging ? 'text-slate-400 italic' : ''}>
+                        {rule.name}
+                        {isDragging && ' (이동 중...)'}
+                      </span>
                       <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">
                         적용 {rule.appliedCount}건
                       </span>

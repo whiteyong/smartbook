@@ -33,9 +33,16 @@ import {
 import { Account, Transaction, TransactionAttachment, SplitItem, ClassificationRule, PayslipItem } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
 import { formatKRW, formatSignedKRW } from '../utils/formatters';
-import { CategorySelector } from './CategorySelector';
+import { CategorySelector, EXPENSE_SHORTCUTS, INCOME_SHORTCUTS } from './CategorySelector';
 import { PayslipModal } from './PayslipModal';
 import { parsePayslipFromWorkbook, estimatePayslipFromAmount, validatePayslip } from '../utils/payslipParser';
+import {
+  getMergedCategoryTree,
+  getStoredCustomCategories,
+  addCustomCategory,
+  removeCustomCategory,
+  DEFAULT_PARENT_GROUPS,
+} from '../utils/categoryManager';
 import { FileSpreadsheet, ShieldCheck, Coins } from 'lucide-react';
 
 interface S3TransactionsProps {
@@ -139,18 +146,18 @@ export const DEFAULT_COLUMNS: ColumnMeta[] = [
 ];
 
 export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
-  date: 95,
-  account: 110,
+  date: 107,
+  account: 90,
   description: 250,
-  amount: 115,
-  category: 120,
-  tags: 150,
-  receipt: 65,
-  status: 75,
+  amount: 130,
+  category: 150,
+  tags: 120,
+  receipt: 90,
+  status: 110,
 };
 
-const STORAGE_KEY_COL_ORDER = 's3_tx_column_order';
-const STORAGE_KEY_COL_WIDTHS = 's3_tx_column_widths';
+const STORAGE_KEY_COL_ORDER = 's3_tx_column_order_v6';
+const STORAGE_KEY_COL_WIDTHS = 's3_tx_column_widths_v6';
 const STORAGE_KEY_DETAIL_WIDTH = 's3_tx_detail_panel_width';
 const DEFAULT_DETAIL_PANEL_WIDTH = 380;
 const MIN_DETAIL_PANEL_WIDTH = 260;
@@ -249,6 +256,42 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const [tagPopoverPos, setTagPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [tagInputVal, setTagInputVal] = useState<string>('');
   const tagPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  // 카테고리 컬럼 직접 추가/수정/변경 팝오버 상태
+  const [categoryPopoverTxId, setCategoryPopoverTxId] = useState<string | null>(null);
+  const [categoryPopoverPos, setCategoryPopoverPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  }>({ top: 0, left: 0, width: 380, maxHeight: 480 });
+  const categoryPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [categoryPopoverSearch, setCategoryPopoverSearch] = useState<string>('');
+  const [categoryPopoverGroup, setCategoryPopoverGroup] = useState<string>('전체');
+  const [categoryPopoverIsAdding, setCategoryPopoverIsAdding] = useState<boolean>(false);
+  const [categoryPopoverAddGroup, setCategoryPopoverAddGroup] = useState<string>('식비');
+  const [categoryPopoverAddSub, setCategoryPopoverAddSub] = useState<string>('');
+  const [categoryPopoverAutoRule, setCategoryPopoverAutoRule] = useState<boolean>(false);
+  const [customCategories, setCustomCategories] = useState<string[]>(getStoredCustomCategories);
+
+  useEffect(() => {
+    const handleCustomCatsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<string[]>).detail;
+      if (detail) {
+        setCustomCategories(detail);
+      } else {
+        setCustomCategories(getStoredCustomCategories());
+      }
+    };
+    window.addEventListener('custom-categories-changed', handleCustomCatsChanged);
+    return () => {
+      window.removeEventListener('custom-categories-changed', handleCustomCatsChanged);
+    };
+  }, []);
+
+  const mergedCategoryTree = useMemo(() => {
+    return getMergedCategoryTree(customCategories);
+  }, [customCategories]);
 
   // 상단 필터 레이어 상태 (계좌, 유형, 카테고리)
   const [isAccountLayerOpen, setIsAccountLayerOpen] = useState(false);
@@ -364,6 +407,12 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const minTableWidth = useMemo(() => {
     const checkboxWidth = 40;
     const sum = columnOrder.reduce((acc, colId) => {
+      if (
+        colId === 'description' &&
+        (!columnWidths[colId] || columnWidths[colId] === DEFAULT_COLUMN_WIDTHS.description)
+      ) {
+        return acc + 120;
+      }
       return acc + (columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100);
     }, 0);
     return checkboxWidth + sum;
@@ -373,6 +422,12 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const gridTemplateColumns = useMemo(() => {
     const checkboxCol = '40px';
     const tracks = columnOrder.map((colId) => {
+      if (
+        colId === 'description' &&
+        (!columnWidths[colId] || columnWidths[colId] === DEFAULT_COLUMN_WIDTHS.description)
+      ) {
+        return 'minmax(120px, 1fr)';
+      }
       const w = columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100;
       return `${w}px`;
     });
@@ -422,7 +477,10 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     setResizingColId(colId);
 
     const startX = e.clientX;
-    const initialWidth = columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100;
+    const colElement = document.getElementById(`th-col-${colId}`);
+    const initialWidth = colElement
+      ? colElement.getBoundingClientRect().width
+      : (columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100);
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       moveEvent.preventDefault();
@@ -550,6 +608,16 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     try {
       localStorage.removeItem(STORAGE_KEY_COL_ORDER);
       localStorage.removeItem(STORAGE_KEY_COL_WIDTHS);
+      localStorage.removeItem('s3_tx_column_order');
+      localStorage.removeItem('s3_tx_column_widths');
+      localStorage.removeItem('s3_tx_column_order_v2');
+      localStorage.removeItem('s3_tx_column_widths_v2');
+      localStorage.removeItem('s3_tx_column_order_v3');
+      localStorage.removeItem('s3_tx_column_widths_v3');
+      localStorage.removeItem('s3_tx_column_order_v4');
+      localStorage.removeItem('s3_tx_column_widths_v4');
+      localStorage.removeItem('s3_tx_column_order_v5');
+      localStorage.removeItem('s3_tx_column_widths_v5');
     } catch {
       // ignore
     }
@@ -683,6 +751,149 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [tagPopoverTxId]);
+
+  // 카테고리 팝오버 외부 클릭 및 ESC 닫기
+  useEffect(() => {
+    if (!categoryPopoverTxId) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (categoryPopoverRef.current && categoryPopoverRef.current.contains(target)) {
+        return;
+      }
+      const activeCell = document.getElementById(`tx-category-cell-${categoryPopoverTxId}`);
+      if (activeCell && activeCell.contains(target)) {
+        return;
+      }
+      setCategoryPopoverTxId(null);
+      setCategoryPopoverSearch('');
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCategoryPopoverTxId(null);
+        setCategoryPopoverSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [categoryPopoverTxId]);
+
+  const handleOpenCategoryPopover = (e: React.MouseEvent, txId: string) => {
+    e.stopPropagation();
+    if (categoryPopoverTxId === txId) {
+      setCategoryPopoverTxId(null);
+      setCategoryPopoverSearch('');
+      return;
+    }
+
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const popoverWidth = Math.min(380, window.innerWidth - 24);
+    const targetTx = transactions.find((t) => t.id === txId);
+    const isIncome = targetTx?.direction === 'in';
+    const popoverDesiredHeight = isIncome ? 380 : 490;
+
+    let left = rect.left;
+    if (left + popoverWidth > window.innerWidth - 16) {
+      left = window.innerWidth - popoverWidth - 16;
+    }
+    if (left < 16) left = 16;
+
+    const spaceBelow = window.innerHeight - rect.bottom - 12;
+    const spaceAbove = rect.top - 12;
+
+    let top: number;
+    let maxHeight: number;
+    if (spaceBelow < 280 && spaceAbove > spaceBelow) {
+      maxHeight = Math.min(popoverDesiredHeight, Math.max(220, spaceAbove));
+      top = Math.max(12, rect.top - maxHeight - 6);
+    } else {
+      maxHeight = Math.min(popoverDesiredHeight, Math.max(220, spaceBelow));
+      top = rect.bottom + 6;
+    }
+
+    setCategoryPopoverPos({ top, left, width: popoverWidth, maxHeight });
+    setCategoryPopoverTxId(txId);
+    setCategoryPopoverSearch('');
+    setCategoryPopoverIsAdding(false);
+    setCategoryPopoverAddSub('');
+    setCategoryPopoverAutoRule(false);
+
+    if (targetTx?.category && targetTx.category !== '미분류') {
+      const foundGroup = mergedCategoryTree.find((grp) =>
+        grp.items.some((it) => it === targetTx.category)
+      );
+      const parts = targetTx.category.split(' > ');
+      const addGrp = isIncome
+        ? '수입'
+        : foundGroup
+        ? foundGroup.group
+        : DEFAULT_PARENT_GROUPS.includes(parts[0])
+        ? parts[0]
+        : '식비';
+      setCategoryPopoverGroup('전체');
+      setCategoryPopoverAddGroup(addGrp);
+    } else {
+      setCategoryPopoverGroup('전체');
+      setCategoryPopoverAddGroup(isIncome ? '수입' : '식비');
+    }
+  };
+
+  const handleSelectCategoryForTx = async (txId: string, newCat: string) => {
+    const targetTx = transactions.find((t) => t.id === txId);
+    if (!targetTx) return;
+
+    let newType = targetTx.type;
+    if (newCat.startsWith('수입')) newType = 'income';
+    else if (newCat.startsWith('저축')) newType = 'savings';
+    else if (newCat.startsWith('이체')) newType = 'transfer';
+    else if (targetTx.direction === 'in') newType = 'income';
+    else if (newCat !== '미분류') newType = 'expense';
+
+    const updates: Partial<Transaction> = {
+      category: newCat,
+      type: newType,
+      isConfirmed: newCat !== '미분류',
+      isManualLocked: true,
+    };
+
+    if (newCat === '이체 > 통장간이체') {
+      updates.previousCategoryBeforeTransfer =
+        targetTx.category !== '이체 > 통장간이체' ? targetTx.category : '미분류';
+    } else {
+      updates.previousCategoryBeforeTransfer = undefined;
+    }
+
+    await onUpdateTransaction(txId, updates);
+
+    if (categoryPopoverAutoRule && newCat !== '미분류' && onCreateRuleFromTransaction) {
+      try {
+        await onCreateRuleFromTransaction(targetTx, newCat);
+      } catch (err) {
+        console.error('Failed to create auto rule:', err);
+      }
+    }
+
+    setCategoryPopoverTxId(null);
+    setCategoryPopoverSearch('');
+  };
+
+  const handleAddAndSelectCustomCategory = async (txId: string, catString: string) => {
+    const trimmed = catString.trim();
+    if (!trimmed) return;
+    const targetTx = transactions.find((t) => t.id === txId);
+    const isIncome = targetTx?.direction === 'in';
+    
+    let fullCategory = trimmed;
+    if (!fullCategory.includes(' > ')) {
+      const parent = isIncome ? '수입' : categoryPopoverAddGroup || '식비';
+      fullCategory = `${parent} > ${trimmed}`;
+    }
+    addCustomCategory(fullCategory);
+    await handleSelectCategoryForTx(txId, fullCategory);
+  };
 
   const handleOpenTagPopover = (e: React.MouseEvent, txId: string) => {
     e.stopPropagation();
@@ -1029,6 +1240,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
         target.closest('[role="dialog"]') ||
         target.closest('.category-selector-popup') ||
         (tagPopoverRef.current && tagPopoverRef.current.contains(target)) ||
+        (categoryPopoverRef.current && categoryPopoverRef.current.contains(target)) ||
         target.closest('.animate-toast-in')
       ) {
         return;
@@ -1064,6 +1276,10 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       }
 
       if (e.key === 'Escape') {
+        if (categoryPopoverTxId) {
+          setCategoryPopoverTxId(null);
+          return;
+        }
         if (tagPopoverTxId) {
           setTagPopoverTxId(null);
           return;
@@ -2518,18 +2734,27 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                               );
                             case 'category':
                               return (
-                                <div key="category" className="min-w-0 px-3 py-3 flex items-center justify-start text-left">
+                                <div
+                                  key="category"
+                                  id={`tx-category-cell-${tx.id}`}
+                                  onClick={(e) => handleOpenCategoryPopover(e, tx.id)}
+                                  className="min-w-0 px-2.5 py-1 flex items-center justify-start text-left cursor-pointer hover:bg-indigo-50/50 rounded-lg transition min-h-[34px] group/catcell overflow-hidden select-none"
+                                  title="클릭하여 카테고리 추가/수정/변경"
+                                >
                                   <span
-                                    className={`inline-block max-w-full truncate text-[11px] px-2 py-0.5 rounded-md font-semibold ${
+                                    className={`inline-flex items-center gap-1 max-w-full truncate text-[11px] px-2 py-0.5 rounded-md font-semibold border transition ${
                                       isUnclassified
-                                        ? 'bg-amber-100 text-amber-800'
+                                        ? 'bg-amber-100 text-amber-900 border-amber-300 group-hover/catcell:bg-amber-200/90 group-hover/catcell:border-amber-400 shadow-2xs'
                                         : isTransfer
-                                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-                                        : 'bg-slate-100 text-slate-700'
+                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200/70 group-hover/catcell:bg-indigo-100 group-hover/catcell:border-indigo-300'
+                                        : 'bg-slate-100 text-slate-700 border-slate-200/80 group-hover/catcell:bg-white group-hover/catcell:text-indigo-700 group-hover/catcell:border-indigo-300 group-hover/catcell:shadow-2xs'
                                     }`}
                                     title={tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
                                   >
-                                    {tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
+                                    <span className="truncate">
+                                      {tx.splits && tx.splits.length > 0 ? `분할(${tx.splits.length})` : tx.category}
+                                    </span>
+                                    <ChevronDown className="h-2.5 w-2.5 opacity-40 group-hover/catcell:opacity-100 text-slate-500 group-hover/catcell:text-indigo-600 shrink-0 transition" />
                                   </span>
                                 </div>
                               );
@@ -4060,6 +4285,401 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           onSave={handleSavePayslip}
         />
       )}
+      {/* Floating Category Selection & Management Popover Portal */}
+      {categoryPopoverTxId && (() => {
+        const activePopTx = transactions.find((t) => t.id === categoryPopoverTxId);
+        if (!activePopTx) return null;
+        const isIncome = activePopTx.direction === 'in';
+        const activeShortcuts = isIncome ? INCOME_SHORTCUTS : EXPENSE_SHORTCUTS;
+        const query = categoryPopoverSearch.trim().toLowerCase();
+
+        // Calculate group tabs
+        const nonIncomeGroups = mergedCategoryTree
+          .filter((c) => c.group !== '수입')
+          .map((c) => c.group);
+        const groupTabs = isIncome ? [] : ['전체', ...nonIncomeGroups];
+
+        // Filtered categories
+        const filteredTree = (() => {
+          if (isIncome) {
+            const incomeGrp = mergedCategoryTree.find((g) => g.group === '수입');
+            if (!incomeGrp) return [];
+            const matchedItems = query
+              ? incomeGrp.items.filter((it) => it.toLowerCase().includes(query))
+              : incomeGrp.items;
+            return matchedItems.length > 0 ? [{ ...incomeGrp, items: matchedItems }] : [];
+          }
+
+          const expenseGroups = mergedCategoryTree.filter((g) => g.group !== '수입');
+          return expenseGroups
+            .map((grp) => {
+              if (categoryPopoverGroup !== '전체' && grp.group !== categoryPopoverGroup) {
+                return { ...grp, items: [] };
+              }
+              if (!query) return grp;
+              const matchedItems = grp.items.filter(
+                (item) =>
+                  item.toLowerCase().includes(query) || grp.group.toLowerCase().includes(query)
+              );
+              return { ...grp, items: matchedItems };
+            })
+            .filter((grp) => grp.items.length > 0);
+        })();
+
+        const exactMatchExists = query
+          ? mergedCategoryTree.some((g) =>
+              g.items.some(
+                (it) => it.toLowerCase() === query || it.split(' > ')[1]?.toLowerCase() === query
+              )
+            )
+          : true;
+
+        const isUnclassified = !activePopTx.category || activePopTx.category === '미분류';
+
+        return createPortal(
+          <div
+            ref={categoryPopoverRef}
+            className="fixed bg-white border border-slate-200 rounded-2xl shadow-2xl z-[9999] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-100"
+            style={{
+              top: `${categoryPopoverPos.top}px`,
+              left: `${categoryPopoverPos.left}px`,
+              width: `${categoryPopoverPos.width}px`,
+              height: `${categoryPopoverPos.maxHeight}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header with Transaction Context */}
+            <div className="p-3 border-b border-slate-100 bg-slate-50/90 space-y-2 shrink-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                  <Tag className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                  <span className="text-xs font-bold text-slate-800 truncate">
+                    {activePopTx.counterparty || activePopTx.rawDescription}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryPopoverIsAdding(!categoryPopoverIsAdding)}
+                    className={`text-[10px] px-2 py-0.5 rounded-md font-bold transition flex items-center gap-0.5 ${
+                      categoryPopoverIsAdding
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/60'
+                    }`}
+                    title="새 카테고리 직접 등록"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>직접 추가</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCategoryPopoverTxId(null)}
+                    className="p-1 text-slate-400 hover:text-slate-600 rounded-md transition hover:bg-slate-200"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Direct Custom Category Add Accordion */}
+              {categoryPopoverIsAdding && (
+                <div className="p-2.5 bg-indigo-50/80 border border-indigo-200 rounded-xl space-y-2 animate-in fade-in slide-in-from-top-1">
+                  <div className="text-[11px] font-bold text-indigo-900 flex items-center justify-between">
+                    <span>새 카테고리 직접 등록 및 적용</span>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryPopoverIsAdding(false)}
+                      className="text-indigo-400 hover:text-indigo-700"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <select
+                      value={categoryPopoverAddGroup}
+                      onChange={(e) => setCategoryPopoverAddGroup(e.target.value)}
+                      className="col-span-1 bg-white border border-indigo-200 rounded-lg px-2 py-1 text-xs font-semibold text-slate-800 outline-none"
+                    >
+                      {DEFAULT_PARENT_GROUPS.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={categoryPopoverAddSub}
+                      onChange={(e) => setCategoryPopoverAddSub(e.target.value)}
+                      placeholder="세부 항목명 (예: 야식)"
+                      className="col-span-2 bg-white border border-indigo-200 rounded-lg px-2.5 py-1 text-xs text-slate-800 outline-none focus:ring-1 focus:ring-indigo-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (categoryPopoverAddSub.trim()) {
+                            handleAddAndSelectCustomCategory(
+                              activePopTx.id,
+                              `${categoryPopoverAddGroup} > ${categoryPopoverAddSub.trim()}`
+                            );
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!categoryPopoverAddSub.trim()}
+                    onClick={() => {
+                      if (categoryPopoverAddSub.trim()) {
+                        handleAddAndSelectCustomCategory(
+                          activePopTx.id,
+                          `${categoryPopoverAddGroup} > ${categoryPopoverAddSub.trim()}`
+                        );
+                      }
+                    }}
+                    className="w-full py-1 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition disabled:opacity-40"
+                  >
+                    추가하고 바로 선택하기
+                  </button>
+                </div>
+              )}
+
+              {/* Search Input */}
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  autoFocus={!categoryPopoverIsAdding}
+                  value={categoryPopoverSearch}
+                  onChange={(e) => setCategoryPopoverSearch(e.target.value)}
+                  placeholder={
+                    isIncome
+                      ? '수입 검색 (예: 급여, 상여, 배당, 당근...)'
+                      : '카테고리 검색 (예: 카페, 마트, 외식, 배달...)'
+                  }
+                  className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-7 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                {categoryPopoverSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setCategoryPopoverSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Quick Prompt to Add as New Category when typing something new */}
+              {categoryPopoverSearch.trim() && !exactMatchExists && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAddAndSelectCustomCategory(activePopTx.id, categoryPopoverSearch)
+                  }
+                  className="w-full px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-xl text-xs text-indigo-800 font-bold flex items-center justify-between transition cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5 truncate">
+                    <Plus className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                    <span className="truncate">
+                      '{categoryPopoverSearch.trim()}' 새 카테고리로 추가 및 적용
+                    </span>
+                  </span>
+                  <span className="text-[10px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold shrink-0">
+                    생성
+                  </span>
+                </button>
+              )}
+
+              {/* Quick Shortcuts Chips */}
+              {!categoryPopoverSearch && !categoryPopoverIsAdding && (
+                <div className="pt-0.5">
+                  <div className="text-[10px] font-semibold text-slate-500 mb-1 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Layers className="h-3 w-3 text-amber-500" />
+                      자주 쓰는 빠른 분류 ({isIncome ? '수입' : '지출'})
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {activeShortcuts.map((sc) => {
+                      const Icon = sc.icon;
+                      const isSelected = activePopTx.category === sc.category;
+
+                      return (
+                        <button
+                          key={sc.category}
+                          type="button"
+                          onClick={() => handleSelectCategoryForTx(activePopTx.id, sc.category)}
+                          className={`px-2 py-0.5 rounded-lg text-[11px] font-medium flex items-center gap-1 transition cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-50 border border-indigo-400 text-indigo-700 font-bold ring-1 ring-indigo-200 shadow-2xs'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
+                          }`}
+                        >
+                          <Icon
+                            className={`h-3 w-3 ${
+                              isSelected ? 'text-indigo-600' : 'text-slate-500'
+                            }`}
+                          />
+                          <span>{sc.label}</span>
+                          {isSelected && <Check className="h-3 w-3 text-indigo-600 ml-0.5" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Group Filter Tabs (Only shown for expenses, omitted for income) */}
+            {!isIncome && (
+              <div className="px-2 pt-1.5 pb-1 border-b border-slate-100 bg-white flex items-center gap-1 overflow-x-auto no-scrollbar shrink-0">
+                {groupTabs.map((grpName) => {
+                  const isTabSelected = categoryPopoverGroup === grpName;
+                  return (
+                    <button
+                      key={grpName}
+                      type="button"
+                      onClick={() => {
+                        setCategoryPopoverGroup(grpName);
+                        setCategoryPopoverSearch('');
+                      }}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap transition cursor-pointer ${
+                        isTabSelected
+                          ? 'bg-slate-200 text-slate-900 font-bold border border-slate-300 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      {grpName}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Categories List Body */}
+            <div className="p-2 overflow-y-auto flex-1 divide-y divide-slate-100 overscroll-contain">
+              {filteredTree.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-400 space-y-2">
+                  <Search className="h-5 w-5 mx-auto opacity-40" />
+                  <p>‘{categoryPopoverSearch}’ 검색 결과가 없습니다.</p>
+                  {categoryPopoverSearch && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleAddAndSelectCustomCategory(activePopTx.id, categoryPopoverSearch)
+                      }
+                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg font-bold text-xs shadow-xs hover:bg-indigo-700 transition cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>'{categoryPopoverSearch}' 카테고리로 생성하기</span>
+                    </button>
+                  )}
+                </div>
+              ) : (
+                filteredTree.map((grp) => (
+                  <div key={grp.group} className="py-2 first:pt-1 last:pb-1">
+                    <div className="px-2 py-1 text-[11px] font-bold text-slate-500 flex items-center justify-between">
+                      <span>{grp.group}</span>
+                      <span className="text-[10px] text-slate-400 font-normal">
+                        {grp.items.length}개
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 mt-1">
+                      {grp.items.map((item) => {
+                        const isSelected = activePopTx.category === item;
+                        const isCustom = customCategories.includes(item);
+                        const parts = item.split(' > ');
+                        const mainTitle = parts.length > 1 ? parts[0] : '';
+                        const subTitle = parts.length > 1 ? parts[1] : item;
+
+                        return (
+                          <div
+                            key={item}
+                            className={`w-full px-2.5 py-1.5 rounded-xl text-xs flex items-center justify-between transition group relative ${
+                              isSelected
+                                ? 'bg-indigo-50/90 border border-indigo-300 text-indigo-700 font-bold shadow-2xs'
+                                : 'hover:bg-slate-100 border border-slate-100 text-slate-700'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCategoryForTx(activePopTx.id, item)}
+                              className="text-left truncate flex-1 min-w-0 pr-1 cursor-pointer"
+                            >
+                              {(!isIncome || mainTitle !== '수입') && mainTitle && (
+                                <span
+                                  className={`text-[10px] font-normal mr-1 block ${
+                                    isSelected ? 'text-indigo-500' : 'text-slate-400'
+                                  }`}
+                                >
+                                  {mainTitle}
+                                </span>
+                              )}
+                              <span
+                                className={
+                                  isSelected ? 'text-indigo-900 font-bold' : 'text-slate-800'
+                                }
+                              >
+                                {subTitle}
+                              </span>
+                            </button>
+                            <div className="flex items-center gap-1 shrink-0">
+                              {isCustom && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeCustomCategory(item);
+                                  }}
+                                  className="p-0.5 text-slate-300 hover:text-rose-600 rounded transition opacity-0 group-hover:opacity-100 cursor-pointer"
+                                  title="커스텀 카테고리 삭제"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              )}
+                              {isSelected && (
+                                <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer with Unclassified Option and Auto-Rule Checkbox */}
+            <div className="p-2 border-t border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
+              <button
+                type="button"
+                onClick={() => handleSelectCategoryForTx(activePopTx.id, '미분류')}
+                className={`px-2.5 py-1 text-xs rounded-lg transition font-medium cursor-pointer ${
+                  isUnclassified
+                    ? 'bg-amber-100 text-amber-900 font-bold'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200'
+                }`}
+              >
+                미분류로 지정
+              </button>
+
+              <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none hover:text-slate-900">
+                <input
+                  type="checkbox"
+                  checked={categoryPopoverAutoRule}
+                  onChange={(e) => setCategoryPopoverAutoRule(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                />
+                <span>자동 분류 규칙 등록</span>
+              </label>
+            </div>
+          </div>,
+          document.body
+        );
+      })()}
+
       {/* Floating Tag Creation & Management Popover Portal */}
       {tagPopoverTxId && (() => {
         const activePopTx = transactions.find((t) => t.id === tagPopoverTxId);
