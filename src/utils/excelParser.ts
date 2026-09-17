@@ -33,25 +33,125 @@ export interface ExcelParseResult {
 
 // Common Korean Bank Header Aliases
 const ALIASES: Record<string, string[]> = {
-  occurredAt: ['거래일시', '거래일자', '거래일', '날짜', '거래시간', '일시', 'Date'],
-  counterparty: ['보낸분/받는분', '보낸분·받는분', '보낸분', '받는분', '거래처', '입금자명', '가맹점명', '수취인', 'Counterparty'],
-  description: ['적요', '내용', '거래기록사항', '거래구분', '기재내용', 'Description'],
-  amountOut: ['출금액(원)', '출금액', '찾으신금액', '출금', '지급액', '지급', 'Amount Out'],
-  amountIn: ['입금액(원)', '입금액', '맡기신금액', '입금', '예금', '수입액', 'Amount In'],
-  balanceAfter: ['잔액(원)', '잔액', '거래후잔액', '남은금액', '현재잔액', 'Balance'],
+  occurredAt: ['거래일시', '거래 일시', '거래일자', '거래일', '날짜', '거래시간', '일시', 'Date'],
+  counterparty: ['상대계좌예금주명', '보낸분/받는분', '보낸분·받는분', '보낸분', '받는분', '거래처', '입금자명', '가맹점명', '수취인', '적요', 'Counterparty'],
+  description: ['거래내용', '적요', '내용', '거래기록사항', '기재내용', '거래구분', 'Description'],
+  amountOut: ['출금액(원)', '출금액', '찾으신금액', '출금', '지급액', '지급', '거래금액', '거래 금액', 'Amount Out'],
+  amountIn: ['입금액(원)', '입금액', '맡기신금액', '입금', '예금', '수입액', '거래금액', '거래 금액', 'Amount In'],
+  balanceAfter: ['거래후 잔액', '거래후잔액', '거래 후 잔액', '잔액(원)', '잔액', '남은금액', '현재잔액', 'Balance'],
   memo: ['송금메모', '메모', '비고', 'Memo'],
 };
 
 export function cleanMoney(val: any): number {
   if (val === undefined || val === null || val === '') return 0;
-  if (typeof val === 'number') return Math.round(val);
+  if (typeof val === 'number') return Math.abs(Math.round(val));
   const cleanStr = String(val).replace(/[,원\s]/g, '');
   const num = parseFloat(cleanStr);
-  return isNaN(num) ? 0 : Math.round(num);
+  return isNaN(num) ? 0 : Math.abs(Math.round(num));
 }
 
-export function parseExcelFile(fileData: ArrayBuffer | Uint8Array): ExcelParseResult {
-  const workbook = XLSX.read(fileData, { type: 'array' });
+export class PasswordRequiredError extends Error {
+  constructor(message = 'File is password-protected') {
+    super(message);
+    this.name = 'PasswordRequiredError';
+  }
+}
+
+// Convert ArrayBuffer / Uint8Array to base64 string
+function arrayBufferToBase64(buffer: ArrayBuffer | Uint8Array): string {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+}
+
+// Convert base64 string to Uint8Array
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = window.atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export async function parseExcelFile(
+  fileData: ArrayBuffer | Uint8Array,
+  password?: string
+): Promise<ExcelParseResult> {
+  const u8Array = fileData instanceof Uint8Array ? fileData : new Uint8Array(fileData);
+  let decryptedBytes: Uint8Array = u8Array;
+
+  // 1. If a password is provided, decrypt using officecrypto-tool via server endpoint
+  if (password) {
+    const base64 = arrayBufferToBase64(u8Array);
+    const resp = await fetch('/api/decrypt-excel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileBase64: base64, password: password.trim() }),
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (resp.status === 401 || data.error === 'invalid_password') {
+        throw new Error('비밀번호가 일치하지 않습니다. 생년월일 6자리(YYMMDD) 또는 사업자번호를 확인 후 다시 입력해 주세요.');
+      }
+      throw new Error(data.message || '파일 복호화 중 오류가 발생했습니다.');
+    }
+
+    if (data.decryptedBase64) {
+      decryptedBytes = base64ToUint8Array(data.decryptedBase64);
+    }
+  }
+
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(decryptedBytes, {
+      type: 'array',
+    });
+  } catch (err: any) {
+    const errorMsg = String(err?.message || err || '');
+    if (
+      errorMsg.includes('password-protected') ||
+      errorMsg.toLowerCase().includes('password') ||
+      errorMsg.toLowerCase().includes('encrypted') ||
+      errorMsg.includes('Unsupported') ||
+      errorMsg.includes('CFB') ||
+      errorMsg.includes('Encryption')
+    ) {
+      if (password) {
+        throw new Error('비밀번호가 일치하지 않습니다. 비밀번호를 다시 확인해 주세요.');
+      }
+      throw new PasswordRequiredError('File is password-protected');
+    }
+
+    // Secondary check with server if file is encrypted
+    try {
+      const base64 = arrayBufferToBase64(u8Array);
+      const chk = await fetch('/api/check-excel-encryption', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: base64 }),
+      });
+      const chkData = await chk.json();
+      if (chkData.isEncrypted) {
+        throw new PasswordRequiredError('File is password-protected');
+      }
+    } catch (chkErr) {
+      if (chkErr instanceof PasswordRequiredError) throw chkErr;
+    }
+
+    throw new Error(`엑셀 파일을 읽을 수 없습니다: ${errorMsg}`);
+  }
+
+  if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+    throw new Error('유효한 시트가 포함되지 않은 엑셀 파일입니다.');
+  }
+
   const firstSheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[firstSheetName];
 
@@ -67,7 +167,7 @@ export function parseExcelFile(fileData: ArrayBuffer | Uint8Array): ExcelParseRe
     if (!Array.isArray(row)) continue;
     const stringRow = row.map((cell) => String(cell || '').trim());
     const matchCount = stringRow.filter((cell) =>
-      ['거래일시', '거래일자', '날짜', '적요', '내용', '출금액', '입금액', '잔액', '찾으신금액', '맡기신금액'].some(
+      ['거래일시', '거래 일시', '거래일자', '거래일', '날짜', '적요', '내용', '출금액', '입금액', '잔액', '찾으신금액', '맡기신금액', '출금', '입금', '거래후 잔액', '거래 후 잔액', '상대계좌예금주명', '거래 금액', '거래금액'].some(
         (keyword) => cell.includes(keyword)
       )
     ).length;
@@ -111,10 +211,53 @@ export function parseExcelFile(fileData: ArrayBuffer | Uint8Array): ExcelParseRe
     }
   }
 
-  // Detect bank name
+  // Detect bank name & exact 1:1 mapping
   let detectedBank = '일반 엑셀 양식';
   const headerStr = headers.join(' ');
-  if (headerStr.includes('보낸분/받는분') || headerStr.includes('송금메모')) {
+  const normalizedHeaders = headers.map((h) => h.replace(/\s+/g, ''));
+
+  // 1. Toss Bank Check (User specification 1:1 matching)
+  const isToss =
+    (headers.includes('거래 일시') || normalizedHeaders.includes('거래일시')) &&
+    headers.includes('적요') &&
+    (headers.includes('거래 금액') || normalizedHeaders.includes('거래금액')) &&
+    (headers.includes('거래 후 잔액') || normalizedHeaders.includes('거래후잔액') || headers.includes('거래 유형'));
+
+  // 2. IBK Bank Check
+  const isIBK =
+    headers.includes('상대계좌예금주명') ||
+    (headers.includes('출금') && headers.includes('입금') && headers.includes('거래후 잔액')) ||
+    (headers.includes('거래내용') && headers.includes('CMS코드'));
+
+  if (isToss) {
+    detectedBank = '토스뱅크';
+    // User requested 1:1 exact mapping for Toss:
+    // 거래 일시 -> 거래일시
+    // 적요 -> 보낸분/받는분(거래처)
+    // 거래 유형 -> -
+    // 거래 기관 -> -
+    // 계좌번호 -> -
+    // 거래 금액 -> -이면 출금액(원), 숫자만 있으면 입금액(원)
+    // 거래 후 잔액 -> 잔액(원)
+    // 메모 -> 적요(거래내용)
+    fieldMapping.occurredAt = headers.find((h) => h.replace(/\s+/g, '') === '거래일시') || '거래 일시';
+    fieldMapping.counterparty = headers.find((h) => h === '적요') || '적요';
+    fieldMapping.description = headers.find((h) => h === '메모') || '메모';
+    const amountCol = headers.find((h) => h.replace(/\s+/g, '') === '거래금액' || h.replace(/\s+/g, '') === '거래금액(원)') || '거래 금액';
+    fieldMapping.amountOut = amountCol;
+    fieldMapping.amountIn = amountCol;
+    fieldMapping.balanceAfter = headers.find((h) => h.replace(/\s+/g, '') === '거래후잔액' || h.replace(/\s+/g, '') === '잔액(원)' || h.replace(/\s+/g, '') === '잔액') || '거래 후 잔액';
+    fieldMapping.memo = '';
+  } else if (isIBK) {
+    detectedBank = 'IBK기업은행';
+    fieldMapping.occurredAt = headers.find((h) => h === '거래일시') || fieldMapping.occurredAt;
+    fieldMapping.amountOut = headers.find((h) => h === '출금') || fieldMapping.amountOut;
+    fieldMapping.amountIn = headers.find((h) => h === '입금') || fieldMapping.amountIn;
+    fieldMapping.balanceAfter = headers.find((h) => h === '거래후 잔액' || h === '거래후잔액') || fieldMapping.balanceAfter;
+    fieldMapping.description = headers.find((h) => h === '거래내용') || fieldMapping.description;
+    fieldMapping.counterparty = headers.find((h) => h === '상대계좌예금주명') || fieldMapping.counterparty;
+    fieldMapping.memo = '';
+  } else if (headerStr.includes('보낸분/받는분') || headerStr.includes('송금메모')) {
     detectedBank = 'KB국민은행';
   } else if (headerStr.includes('찾으신금액') || headerStr.includes('맡기신금액')) {
     detectedBank = '우리은행/농협';
@@ -137,109 +280,270 @@ export function convertRowsToTransactions(
   accountId: string,
   accountAlias: string,
   batchId: string,
-  existingTransactions: Transaction[]
+  existingTransactions: Transaction[] = []
 ): {
   items: Transaction[];
-  duplicates: Transaction[];
-  summary: { total: number; newCount: number; duplicateCount: number };
+  candidateTxs: Transaction[];
+  duplicates: number;
+  duplicatesCount: number;
+  duplicateItems: Transaction[];
+  newItems: Transaction[];
+  transferMatchCount: number;
 } {
-  const items: Transaction[] = [];
-  const duplicates: Transaction[] = [];
+  const candidateTxs: Transaction[] = [];
+  const duplicateItems: Transaction[] = [];
+  const newItems: Transaction[] = [];
+  let duplicatesCount = 0;
+  let transferMatchCount = 0;
 
-  // Build duplicate lookup hash (accountId + date + amount + counterparty)
-  const existingSet = new Set<string>();
-  for (const t of existingTransactions) {
-    const hashKey = `${t.accountId}_${t.occurredAt.split(' ')[0]}_${t.amount}_${t.counterparty.trim()}`;
-    existingSet.add(hashKey);
-  }
-
-  rawRows.forEach((row, idx) => {
+  rawRows.forEach((row, index) => {
+    // Extract raw string values
     const rawDate = String(row[fieldMapping.occurredAt] || '').trim();
-    if (!rawDate) return;
+    const rawDesc = String(row[fieldMapping.description] || '').trim();
+    const rawCp = String(row[fieldMapping.counterparty] || '').trim();
+    const rawOut = row[fieldMapping.amountOut];
+    const rawIn = row[fieldMapping.amountIn];
+    const rawBalance = row[fieldMapping.balanceAfter || ''];
+    const rawMemo = fieldMapping.memo ? String(row[fieldMapping.memo] || '').trim() : '';
 
-    // Normalize Date (e.g., 2026.09.15, 2026-09-15, 20260915, 2026-09-15 14:20)
-    let formattedDate = rawDate.replace(/\./g, '-').replace(/\//g, '-');
-    if (/^\d{8}$/.test(formattedDate)) {
-      formattedDate = `${formattedDate.substring(0, 4)}-${formattedDate.substring(4, 6)}-${formattedDate.substring(6, 8)}`;
+    if (!rawDate && !rawDesc && !rawCp && !rawOut && !rawIn) {
+      return; // Skip empty row
     }
 
-    const counterparty = String(row[fieldMapping.counterparty] || row[fieldMapping.description] || '기타 거래처').trim();
-    const description = String(row[fieldMapping.description] || '').trim();
-    const memo = fieldMapping.memo ? String(row[fieldMapping.memo] || '').trim() : '';
-
-    const outAmount = fieldMapping.amountOut ? cleanMoney(row[fieldMapping.amountOut]) : 0;
-    const inAmount = fieldMapping.amountIn ? cleanMoney(row[fieldMapping.amountIn]) : 0;
-
-    let amount = 0;
+    // Determine direction and amount
     let direction: Direction = 'out';
+    let amount = 0;
 
-    if (inAmount > 0 && outAmount === 0) {
-      amount = inAmount;
-      direction = 'in';
-    } else if (outAmount > 0) {
-      amount = outAmount;
-      direction = 'out';
-    } else if (inAmount > 0) {
-      amount = inAmount;
-      direction = 'in';
+    // Special logic when amountOut and amountIn share the same single column (e.g. Toss Bank 거래 금액: -35,000 vs 100,000)
+    if (fieldMapping.amountOut && fieldMapping.amountOut === fieldMapping.amountIn) {
+      const rawSingle = String(rawOut || '').trim();
+      if (rawSingle.includes('-')) {
+        direction = 'out';
+        amount = cleanMoney(rawSingle);
+      } else {
+        const val = cleanMoney(rawSingle);
+        if (val > 0) {
+          direction = 'in';
+          amount = val;
+        }
+      }
+    } else {
+      const outVal = cleanMoney(rawOut);
+      const inVal = cleanMoney(rawIn);
+
+      if (outVal > 0) {
+        direction = 'out';
+        amount = outVal;
+      } else if (inVal > 0) {
+        direction = 'in';
+        amount = inVal;
+      } else {
+        amount = 0;
+      }
     }
 
-    if (amount === 0) return;
+    if (amount === 0) {
+      return; // Skip 0 KRW rows
+    }
 
-    const balanceAfter = fieldMapping.balanceAfter ? cleanMoney(row[fieldMapping.balanceAfter]) : undefined;
+    // Format ISO Date Time
+    let formattedDate = rawDate.replace(/\./g, '-').replace(/\//g, '-');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(formattedDate)) {
+      formattedDate = `${formattedDate}T12:00:00`;
+    } else if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(formattedDate)) {
+      formattedDate = formattedDate.replace(' ', 'T');
+      if (formattedDate.length === 16) {
+        formattedDate = `${formattedDate}:00`;
+      }
+    } else {
+      // Fallback today date if malformed
+      try {
+        const d = new Date(formattedDate);
+        if (!isNaN(d.getTime())) {
+          formattedDate = d.toISOString().substring(0, 19);
+        } else {
+          formattedDate = new Date().toISOString().substring(0, 19);
+        }
+      } catch {
+        formattedDate = new Date().toISOString().substring(0, 19);
+      }
+    }
 
-    const dateOnly = formattedDate.split(' ')[0];
-    const hashKey = `${accountId}_${dateOnly}_${amount}_${counterparty}`;
-    const isDup = existingSet.has(hashKey);
+    const counterparty = rawCp || '미지정';
+    const description = rawDesc || '';
+    const balanceAfter = rawBalance !== undefined && rawBalance !== '' ? cleanMoney(rawBalance) : undefined;
 
-    const now = new Date().toISOString();
+    // Auto-detect Transfer (계좌간 이체 감지)
+    const isTransferKeyword =
+      counterparty.includes('이체') ||
+      counterparty.includes('출금') ||
+      counterparty.includes('입금') ||
+      description.includes('이체') ||
+      description.includes('타행') ||
+      description.includes('당행');
+
+    // Duplicate Check: Same account, same day, same amount, same direction, same counterparty
+    const isDuplicate = existingTransactions.some((existing) => {
+      const sameAcc = existing.accountId === accountId;
+      const sameDay = existing.occurredAt.substring(0, 10) === formattedDate.substring(0, 10);
+      const sameAmt = existing.amount === amount;
+      const sameDir = existing.direction === direction;
+      const sameCp = existing.counterparty === counterparty;
+      return sameAcc && sameDay && sameAmt && sameDir && sameCp;
+    });
+
+    if (isDuplicate) {
+      duplicatesCount++;
+    }
+
+    // Transfer Candidate check with opposite existing transaction on other accounts within 3 days
+    const txDate = new Date(formattedDate).getTime();
+    const isTransferCandidate = existingTransactions.some((existing) => {
+      if (existing.accountId === accountId) return false;
+      if (existing.amount !== amount) return false;
+      if (existing.direction === direction) return false; // Must be opposite direction
+      const diffDays = Math.abs(new Date(existing.occurredAt).getTime() - txDate) / (1000 * 60 * 60 * 24);
+      return diffDays <= 3;
+    });
+
+    if (isTransferCandidate) {
+      transferMatchCount++;
+    }
+
+    // Construct transaction object
     const tx: Transaction = {
-      id: `tx_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      id: `imp-${batchId}-${index}-${Date.now().toString(36)}`,
       accountId,
       accountAlias,
       occurredAt: formattedDate,
       direction,
-      amount,
-      rawCounterparty: counterparty,
-      counterparty,
-      rawDescription: description || counterparty,
-      balanceAfter,
       type: direction === 'in' ? 'income' : 'expense',
-      category: '미분류',
+      amount,
+      balanceAfter,
+      rawCounterparty: rawCp || '',
+      counterparty,
+      rawDescription: rawDesc || '',
+      memo: rawMemo,
+      category: isTransferKeyword || isTransferCandidate ? '계좌이체' : '미분류',
       isFixed: false,
-      tags: [],
+      tags: isDuplicate ? ['중복의심'] : isTransferCandidate ? ['이체매칭후보'] : [],
       isConfirmed: false,
       isManualLocked: false,
-      memo: memo || '',
       importBatchId: batchId,
-      createdAt: now,
-      updatedAt: now,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
-    if (isDup) {
-      duplicates.push(tx);
+    candidateTxs.push(tx);
+    if (isDuplicate) {
+      duplicateItems.push(tx);
     } else {
-      items.push(tx);
-      existingSet.add(hashKey);
+      newItems.push(tx);
     }
   });
 
   return {
-    items,
-    duplicates,
-    summary: {
-      total: items.length + duplicates.length,
-      newCount: items.length,
-      duplicateCount: duplicates.length,
-    },
+    items: candidateTxs,
+    candidateTxs,
+    duplicates: duplicatesCount,
+    duplicatesCount,
+    duplicateItems,
+    newItems,
+    transferMatchCount,
   };
 }
 
-// Generate Realistic Sample Bank Excel for testing
-export function generateSampleBankExcel(bankName: '국민은행' | '신한은행'): Uint8Array {
+// Generate Sample Bank Files for Quick Testing
+export async function generateSampleBankExcel(
+  bankName: '토스뱅크' | '국민은행' | '기업은행' | '신한은행',
+  encryptedPassword?: string
+): Promise<Uint8Array> {
   let data: any[] = [];
 
-  if (bankName === '국민은행') {
+  if (bankName === '토스뱅크') {
+    data = [
+      {
+        '거래 일시': '2026-09-28 14:22:10',
+        적요: '스타벅스 강남점',
+        '거래 유형': '체크카드',
+        '거래 기관': '토스뱅크',
+        계좌번호: '1000-01-123456',
+        '거래 금액': '-6,500',
+        '거래 후 잔액': '2,450,000',
+        메모: '아이스 카페라떼',
+      },
+      {
+        '거래 일시': '2026-09-28 12:45:00',
+        적요: '샐러디 역삼점',
+        '거래 유형': '체크카드',
+        '거래 기관': '토스뱅크',
+        계좌번호: '1000-01-123456',
+        '거래 금액': '-11,200',
+        '거래 후 잔액': '2,456,500',
+        메모: '점심 샐러드',
+      },
+      {
+        '거래 일시': '2026-09-27 18:30:15',
+        적요: '카카오페이 충전',
+        '거래 유형': '간편결제',
+        '거래 기관': '토스뱅크',
+        계좌번호: '1000-01-123456',
+        '거래 금액': '-50,000',
+        '거래 후 잔액': '2,467,700',
+        메모: '쇼핑 결제용 충전',
+      },
+      {
+        '거래 일시': '2026-09-25 09:30:00',
+        적요: '홍길동',
+        '거래 유형': '토스이체',
+        '거래 기관': '토스뱅크',
+        계좌번호: '1000-01-123456',
+        '거래 금액': '250,000',
+        '거래 후 잔액': '2,517,700',
+        메모: '모임 정산 회비',
+      },
+      {
+        '거래 일시': '2026-09-24 19:15:20',
+        적요: '쿠팡 로켓프레시',
+        '거래 유형': '체크카드',
+        '거래 기관': '토스뱅크',
+        계좌번호: '1000-01-123456',
+        '거래 금액': '-34,800',
+        '거래 후 잔액': '2,267,700',
+        메모: '주말 식료품',
+      },
+    ];
+  } else if (bankName === '기업은행') {
+    data = [
+      {
+        거래일시: '2026-09-28 15:30:00',
+        상대계좌예금주명: '주식회사 알파솔루션',
+        거래내용: '용역대금 입금',
+        출금: 0,
+        입금: 1850000,
+        '거래후 잔액': 8950000,
+        CMS코드: 'CMS-202609',
+      },
+      {
+        거래일시: '2026-09-27 11:20:00',
+        상대계좌예금주명: 'SK텔레콤(주)',
+        거래내용: '통신비 자동이체',
+        출금: 78500,
+        입금: 0,
+        '거래후 잔액': 7100000,
+        CMS코드: 'AUTOPAY',
+      },
+      {
+        거래일시: '2026-09-25 14:00:00',
+        상대계좌예금주명: '김철수',
+        거래내용: '프로젝트 컨설팅비',
+        출금: 0,
+        입금: 500000,
+        '거래후 잔액': 7178500,
+        CMS코드: 'MANUAL',
+      },
+    ];
+  } else if (bankName === '국민은행') {
     data = [
       {
         거래일시: '2026-09-28 12:30:15',
@@ -323,5 +627,24 @@ export function generateSampleBankExcel(bankName: '국민은행' | '신한은행
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, '거래내역');
   const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  return new Uint8Array(excelBuffer);
+  const rawBytes = new Uint8Array(excelBuffer);
+
+  if (encryptedPassword) {
+    try {
+      const base64 = arrayBufferToBase64(rawBytes);
+      const resp = await fetch('/api/encrypt-excel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64: base64, password: encryptedPassword }),
+      });
+      const resData = await resp.json();
+      if (resData.encryptedBase64) {
+        return base64ToUint8Array(resData.encryptedBase64);
+      }
+    } catch (e) {
+      console.error('Failed to encrypt sample excel via API:', e);
+    }
+  }
+
+  return rawBytes;
 }

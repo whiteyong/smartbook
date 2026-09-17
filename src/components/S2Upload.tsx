@@ -9,6 +9,14 @@ import {
   Sparkles,
   Layers,
   ArrowLeftRight,
+  Lock,
+  Eye,
+  EyeOff,
+  X,
+  RefreshCw,
+  Trash2,
+  Ban,
+  Filter,
 } from 'lucide-react';
 import { Account, Transaction, ClassificationRule, ImportBatch } from '../types';
 import {
@@ -16,6 +24,8 @@ import {
   convertRowsToTransactions,
   ExcelParseResult,
   generateSampleBankExcel,
+  PasswordRequiredError,
+  cleanMoney,
 } from '../utils/excelParser';
 import {
   applyRulesToTransaction,
@@ -59,35 +69,117 @@ export const S2Upload: React.FC<S2UploadProps> = ({
   const [batchId, setBatchId] = useState<string>('');
   const [candidateTxs, setCandidateTxs] = useState<Transaction[]>([]);
   const [duplicateTxs, setDuplicateTxs] = useState<Transaction[]>([]);
-  const [includeDuplicates, setIncludeDuplicates] = useState<boolean>(false);
+  const [duplicateCount, setDuplicateCount] = useState<number>(0);
+  const [excludedTxIds, setExcludedTxIds] = useState<Set<string>>(new Set());
+  const [activeFilter, setActiveFilter] = useState<'all' | 'new' | 'duplicate' | 'transfer' | 'unclassified'>('all');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [recentBatches, setRecentBatches] = useState<ImportBatch[]>([]);
 
   // Step 3: Classification controls
-  const [filterUnclassifiedOnly, setFilterUnclassifiedOnly] = useState<boolean>(false);
-  const [applyToSameCounterparty, setApplyToSameCounterparty] = useState<boolean>(true);
+  const [applyToSameCounterparty, setApplyToSameCounterparty] = useState<boolean>(false);
   const [rulesToRegister, setRulesToRegister] = useState<Record<string, { keyword: string; category: string; direction: 'in' | 'out'; type: 'income' | 'expense' }>>({});
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
 
+  // Password-protected excel file handling
+  const [pendingBuffer, setPendingBuffer] = useState<ArrayBuffer | null>(null);
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState<boolean>(false);
+  const [filePassword, setFilePassword] = useState<string>('');
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDecrypting, setIsDecrypting] = useState<boolean>(false);
+
   // File Handler
   const handleFile = async (f: File) => {
+    setUploadError(null);
+    setPasswordError(null);
     setFile(f);
-    const buffer = await f.arrayBuffer();
-    const result = parseExcelFile(buffer);
-    setParseResult(result);
-    setFieldMapping(result.fieldMapping);
-    setStep(2);
+    try {
+      const buffer = await f.arrayBuffer();
+      setPendingBuffer(buffer);
+      const result = await parseExcelFile(buffer);
+      setParseResult(result);
+      setFieldMapping(result.fieldMapping);
+      setStep(2);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (
+        msg.includes('password-protected') ||
+        msg.toLowerCase().includes('password') ||
+        msg.toLowerCase().includes('encrypted') ||
+        err instanceof PasswordRequiredError
+      ) {
+        setIsPasswordModalOpen(true);
+        setFilePassword('');
+        return;
+      }
+      setUploadError(err?.message || '엑셀 파일을 읽는 중 오류가 발생했습니다.');
+    }
+  };
+
+  // Unlock password-protected excel handler
+  const handleUnlockWithPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingBuffer || isDecrypting) return;
+    const trimmedPassword = filePassword.trim();
+    if (!trimmedPassword) {
+      setPasswordError('비밀번호를 입력해 주세요.');
+      return;
+    }
+    setPasswordError(null);
+    setIsDecrypting(true);
+    try {
+      const result = await parseExcelFile(pendingBuffer, trimmedPassword);
+      setParseResult(result);
+      setFieldMapping(result.fieldMapping);
+      setIsPasswordModalOpen(false);
+      setFilePassword('');
+      setStep(2);
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (
+        msg.includes('password') ||
+        msg.includes('encrypted') ||
+        msg.includes('암호') ||
+        msg.includes('incorrect') ||
+        err instanceof PasswordRequiredError
+      ) {
+        setPasswordError('암호가 일치하지 않습니다. 생년월일 6자리(YYMMDD) 또는 사업자번호를 확인 후 다시 입력해 주세요.');
+      } else {
+        setPasswordError(err?.message || '파일을 여는 중 오류가 발생했습니다.');
+      }
+    } finally {
+      setIsDecrypting(false);
+    }
   };
 
   // Sample Bank File Handler
-  const handleLoadSample = (bank: '국민은행' | '신한은행') => {
-    const uint8 = generateSampleBankExcel(bank);
-    const result = parseExcelFile(uint8.buffer);
-    setParseResult(result);
-    setFieldMapping(result.fieldMapping);
-    setFile(new File([uint8.buffer], `${bank}_거래내역.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    setStep(2);
+  const handleLoadSample = async (bank: '토스뱅크' | '국민은행' | '기업은행' | '신한은행', isEncrypted = false) => {
+    setUploadError(null);
+    setPasswordError(null);
+    const uint8 = await generateSampleBankExcel(bank, isEncrypted ? '920512' : undefined);
+    setPendingBuffer(uint8.buffer);
+    setFile(new File([uint8.buffer], `${bank}_거래내역${isEncrypted ? '_보안' : ''}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+
+    if (isEncrypted) {
+      setIsPasswordModalOpen(true);
+      setFilePassword('');
+      return;
+    }
+
+    try {
+      const result = await parseExcelFile(uint8.buffer);
+      setParseResult(result);
+      setFieldMapping(result.fieldMapping);
+      setStep(2);
+    } catch (err: any) {
+      if (err instanceof PasswordRequiredError) {
+        setIsPasswordModalOpen(true);
+      } else {
+        setUploadError(err?.message || '샘플 파일을 여는 중 오류가 발생했습니다.');
+      }
+    }
   };
 
   // Step 2 -> Step 3 Process
@@ -97,7 +189,7 @@ export const S2Upload: React.FC<S2UploadProps> = ({
     const newBatchId = 'batch_' + Date.now();
     setBatchId(newBatchId);
 
-    const { items, duplicates } = convertRowsToTransactions(
+    const result = convertRowsToTransactions(
       parseResult.rawRows,
       fieldMapping,
       selectedAccount.id,
@@ -107,14 +199,52 @@ export const S2Upload: React.FC<S2UploadProps> = ({
     );
 
     // Apply auto classification rules to new items
-    const classifiedItems = items.map((tx) => {
+    const classifiedItems = result.items.map((tx) => {
       const { updatedTx } = applyRulesToTransaction(tx, rules);
       return updatedTx;
     });
 
     setCandidateTxs(classifiedItems);
-    setDuplicateTxs(duplicates);
+    setDuplicateTxs(result.duplicateItems || []);
+    setDuplicateCount(result.duplicatesCount ?? result.duplicateItems?.length ?? 0);
+    setExcludedTxIds(new Set());
+    setActiveFilter('all');
     setStep(3);
+  };
+
+  // Step 3 Exclusion Handlers
+  const handleToggleExclude = (txId: string) => {
+    setExcludedTxIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(txId)) {
+        next.delete(txId);
+      } else {
+        next.add(txId);
+      }
+      return next;
+    });
+  };
+
+  const handleExcludeAllDuplicates = () => {
+    const duplicateIds = candidateTxs
+      .filter((t) => t.tags.includes('중복의심'))
+      .map((t) => t.id);
+    setExcludedTxIds((prev) => {
+      const next = new Set(prev);
+      duplicateIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
+
+  const handleRestoreAllDuplicates = () => {
+    const duplicateIds = new Set(
+      candidateTxs.filter((t) => t.tags.includes('중복의심')).map((t) => t.id)
+    );
+    setExcludedTxIds((prev) => {
+      const next = new Set(prev);
+      duplicateIds.forEach((id) => next.delete(id));
+      return next;
+    });
   };
 
   // Step 3 Category Change Handler
@@ -216,9 +346,13 @@ export const S2Upload: React.FC<S2UploadProps> = ({
         }
       }
 
-      let finalToImport = [...candidateTxs];
-      if (includeDuplicates && duplicateTxs.length > 0) {
-        finalToImport = [...finalToImport, ...duplicateTxs];
+      // Filter out excluded transactions
+      const finalToImport = candidateTxs.filter((t) => !excludedTxIds.has(t.id));
+
+      if (finalToImport.length === 0) {
+        alert('반영할 거래 내역이 없습니다. (모든 항목이 제외되었습니다)');
+        setIsProcessing(false);
+        return;
       }
 
       // Check for Inter-account transfer matchings with all existing + new
@@ -236,8 +370,8 @@ export const S2Upload: React.FC<S2UploadProps> = ({
         fileName: file ? file.name : '엑셀_가져오기.xlsx',
         importedAt: new Date().toISOString(),
         totalRows: (parseResult?.rawRows.length || 0),
-        newCount: candidateTxs.length,
-        duplicateCount: duplicateTxs.length,
+        newCount: finalToImport.filter((t) => !t.tags.includes('중복의심')).length,
+        duplicateCount: finalToImport.filter((t) => t.tags.includes('중복의심')).length,
         transferCount,
         canUndo: true,
       };
@@ -247,6 +381,12 @@ export const S2Upload: React.FC<S2UploadProps> = ({
 
       setIsProcessing(false);
       onUploadSuccess();
+      setStep(1);
+      setFile(null);
+      setPendingBuffer(null);
+      setParseResult(null);
+      setCandidateTxs([]);
+      setExcludedTxIds(new Set());
     } catch (error) {
       console.error('Import error:', error);
       setIsProcessing(false);
@@ -366,6 +506,25 @@ export const S2Upload: React.FC<S2UploadProps> = ({
               </div>
             </div>
 
+            {/* Error banner if file reading failed */}
+            {uploadError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 text-xs text-rose-900">
+                  <p className="font-bold">파일 읽기 오류</p>
+                  <p className="mt-0.5 text-rose-700">{uploadError}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setUploadError(null)}
+                  className="text-rose-400 hover:text-rose-700 p-1 rounded-lg"
+                  title="닫기"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
             {/* Drop Zone */}
             <div className="border-2 border-dashed border-slate-200 hover:border-indigo-500 rounded-2xl p-8 text-center transition bg-slate-50/50">
               <input
@@ -399,20 +558,35 @@ export const S2Upload: React.FC<S2UploadProps> = ({
                 <Sparkles className="h-4 w-4 text-indigo-500" />
                 <span>엑셀 파일이 준비되지 않았나요? 실제 은행 양식으로 바로 체험해보세요:</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleLoadSample('토스뱅크')}
+                  className="px-3 py-1.5 text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg transition"
+                >
+                  토스뱅크 샘플
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleLoadSample('토스뱅크', true)}
+                  className="px-3 py-1.5 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg transition flex items-center gap-1"
+                >
+                  <Lock className="h-3 w-3 text-amber-600" />
+                  토스뱅크 (암호 920512)
+                </button>
                 <button
                   type="button"
                   onClick={() => handleLoadSample('국민은행')}
                   className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
                 >
-                  KB국민은행 샘플 테스트
+                  KB국민은행
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleLoadSample('신한은행')}
+                  onClick={() => handleLoadSample('기업은행')}
                   className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
                 >
-                  신한은행 샘플 테스트
+                  IBK기업은행
                 </button>
               </div>
             </div>
@@ -567,19 +741,47 @@ export const S2Upload: React.FC<S2UploadProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
-                    {parseResult.rawRows.slice(0, 5).map((row, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/60">
-                        <td className="py-2 px-3 font-mono">{String(row[fieldMapping.occurredAt] || '-')}</td>
-                        <td className="py-2 px-3 font-medium">{String(row[fieldMapping.counterparty] || '-')}</td>
-                        <td className="py-2 px-3 text-slate-500">{String(row[fieldMapping.description] || '-')}</td>
-                        <td className="py-2 px-3 text-right font-semibold text-rose-600">
-                          {row[fieldMapping.amountOut] ? formatKRW(Number(String(row[fieldMapping.amountOut]).replace(/,/g, ''))) : '-'}
-                        </td>
-                        <td className="py-2 px-3 text-right font-semibold text-emerald-600">
-                          {row[fieldMapping.amountIn] ? formatKRW(Number(String(row[fieldMapping.amountIn]).replace(/,/g, ''))) : '-'}
-                        </td>
-                      </tr>
-                    ))}
+                    {parseResult.rawRows.slice(0, 5).map((row, idx) => {
+                      const isSingleCol =
+                        Boolean(fieldMapping.amountOut) &&
+                        Boolean(fieldMapping.amountIn) &&
+                        fieldMapping.amountOut === fieldMapping.amountIn;
+
+                      let outDisplay = '-';
+                      let inDisplay = '-';
+
+                      if (isSingleCol) {
+                        const rawVal = row[fieldMapping.amountOut];
+                        const strVal = String(rawVal ?? '').trim();
+                        const numVal = typeof rawVal === 'number' ? rawVal : parseFloat(strVal.replace(/[,원\s]/g, ''));
+                        if (!isNaN(numVal) && numVal !== 0) {
+                          if (numVal < 0 || strVal.startsWith('-') || strVal.includes('-')) {
+                            outDisplay = formatKRW(Math.abs(Math.round(numVal)));
+                          } else {
+                            inDisplay = formatKRW(Math.abs(Math.round(numVal)));
+                          }
+                        }
+                      } else {
+                        if (row[fieldMapping.amountOut]) {
+                          const outNum = cleanMoney(row[fieldMapping.amountOut]);
+                          if (outNum > 0) outDisplay = formatKRW(outNum);
+                        }
+                        if (row[fieldMapping.amountIn]) {
+                          const inNum = cleanMoney(row[fieldMapping.amountIn]);
+                          if (inNum > 0) inDisplay = formatKRW(inNum);
+                        }
+                      }
+
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/60">
+                          <td className="py-2 px-3 font-mono">{String(row[fieldMapping.occurredAt] || '-')}</td>
+                          <td className="py-2 px-3 font-medium">{String(row[fieldMapping.counterparty] || '-')}</td>
+                          <td className="py-2 px-3 text-slate-500">{String(row[fieldMapping.description] || '-')}</td>
+                          <td className="py-2 px-3 text-right font-semibold text-rose-600">{outDisplay}</td>
+                          <td className="py-2 px-3 text-right font-semibold text-emerald-600">{inDisplay}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -605,280 +807,401 @@ export const S2Upload: React.FC<S2UploadProps> = ({
       )}
 
       {/* STEP 3: Summary & Duplicates / Transfer Detection */}
-      {step === 3 && (
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-2xs space-y-6">
-            <div className="border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-bold text-slate-900 tracking-tight">가져오기 검토 및 결과 요약</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                신규 거래와 중복 후보를 확인하고 최종 가계부에 반영합니다.
-              </p>
-            </div>
+      {step === 3 && (() => {
+        const newTxs = candidateTxs.filter((t) => !t.tags.includes('중복의심'));
+        const duplicateCandidateTxs = candidateTxs.filter((t) => t.tags.includes('중복의심'));
+        const transferCandidateTxs = candidateTxs.filter(
+          (t) => t.category.includes('이체') || t.isTransfer || t.tags.includes('이체매칭후보')
+        );
+        const unclassifiedTxs = candidateTxs.filter((t) => t.category === '미분류');
 
-            {/* Metric Boxes */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-xl p-4">
-                <div className="text-xs font-semibold text-emerald-700 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                  신규 반영 대상
-                </div>
-                <div className="mt-2 text-2xl font-bold text-emerald-900">{candidateTxs.length}건</div>
-                <div className="text-[11px] text-emerald-700 mt-0.5">자동 분류 규칙 적용 준비됨</div>
-              </div>
+        const excludedDuplicatesCount = duplicateCandidateTxs.filter((t) => excludedTxIds.has(t.id)).length;
+        const isAllDuplicatesExcluded =
+          duplicateCandidateTxs.length > 0 && excludedDuplicatesCount === duplicateCandidateTxs.length;
 
-              <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-4">
-                <div className="text-xs font-semibold text-amber-700 flex items-center gap-1.5">
-                  <AlertCircle className="h-4 w-4 text-amber-600" />
-                  중복 의심 후보
-                </div>
-                <div className="mt-2 text-2xl font-bold text-amber-900">{duplicateTxs.length}건</div>
-                <div className="text-[11px] text-amber-700 mt-0.5">기존에 이미 등록된 동일 거래</div>
-              </div>
+        const activeCandidateTxs = candidateTxs.filter((t) => !excludedTxIds.has(t.id));
 
-              <div className="bg-indigo-50/70 border border-indigo-200/80 rounded-xl p-4">
-                <div className="text-xs font-semibold text-indigo-700 flex items-center gap-1.5">
-                  <ArrowLeftRight className="h-4 w-4 text-indigo-600" />
-                  계좌 간 이체 후보
-                </div>
-                <div className="mt-2 text-2xl font-bold text-indigo-900">
-                  {candidateTxs.filter((t) => t.category.includes('이체')).length}건
-                </div>
-                <div className="text-[11px] text-indigo-700 mt-0.5">지출/수입 통계에서 자동 제외</div>
-              </div>
-            </div>
+        const filteredTxs = candidateTxs.filter((tx) => {
+          if (activeFilter === 'new') return !tx.tags.includes('중복의심');
+          if (activeFilter === 'duplicate') return tx.tags.includes('중복의심');
+          if (activeFilter === 'transfer') {
+            return tx.category.includes('이체') || tx.isTransfer || tx.tags.includes('이체매칭후보');
+          }
+          if (activeFilter === 'unclassified') return tx.category === '미분류';
+          return true; // 'all'
+        });
 
-            {/* Duplicates Toggle */}
-            {duplicateTxs.length > 0 && (
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+        return (
+          <div className="space-y-6">
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-2xs space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-4">
                 <div>
-                  <span className="text-xs font-bold text-slate-800 block">
-                    중복 의심 거래 {duplicateTxs.length}건 처리 방법
-                  </span>
-                  <span className="text-[11px] text-slate-500">
-                    기본값: 중복 제외 (같은 날짜·금액·거래처 거래는 버리지 않고 제외하여 중복 방지)
-                  </span>
+                  <h3 className="text-sm font-bold text-slate-900 tracking-tight">가져오기 검토 및 결과 요약</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    요약 카드를 클릭하여 거래 내역을 필터링하고, 중복 의심 건을 제외할 수 있습니다.
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
+                {activeFilter !== 'all' && (
                   <button
-                    onClick={() => setIncludeDuplicates(false)}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                      !includeDuplicates
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-white border text-slate-700'
-                    }`}
+                    onClick={() => setActiveFilter('all')}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 self-start sm:self-auto bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 transition"
                   >
-                    중복 제외 (권장)
+                    <RotateCcw className="h-3 w-3" /> 전체 내역 보기로 리셋
                   </button>
-                  <button
-                    onClick={() => setIncludeDuplicates(true)}
-                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                      includeDuplicates
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-white border text-slate-700'
-                    }`}
-                  >
-                    별건으로 강제 반영
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Candidate List with In-place Category Classification */}
-            <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-900">
-                    가져올 거래 내역 ({candidateTxs.length}건)
-                  </span>
-                  {candidateTxs.filter((t) => t.category === '미분류').length > 0 ? (
-                    <span className="bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <AlertCircle className="h-3 w-3 text-amber-600" />
-                      미분류 {candidateTxs.filter((t) => t.category === '미분류').length}건 확인 필요
-                    </span>
-                  ) : (
-                    <span className="bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                      전체 분류 완료
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <label className="text-[11px] text-slate-600 flex items-center gap-1.5 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={applyToSameCounterparty}
-                      onChange={(e) => setApplyToSameCounterparty(e.target.checked)}
-                      className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
-                    />
-                    <span className="font-medium">동일 거래처 일괄 적용</span>
-                  </label>
-
-                  <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs bg-slate-50 p-0.5">
-                    <button
-                      onClick={() => setFilterUnclassifiedOnly(false)}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${
-                        !filterUnclassifiedOnly
-                          ? 'bg-white text-slate-800 shadow-2xs font-bold'
-                          : 'text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      전체 ({candidateTxs.length})
-                    </button>
-                    <button
-                      onClick={() => setFilterUnclassifiedOnly(true)}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition flex items-center gap-1 ${
-                        filterUnclassifiedOnly
-                          ? 'bg-amber-500 text-white shadow-2xs font-bold'
-                          : 'text-amber-700 hover:text-amber-900'
-                      }`}
-                    >
-                      미분류만 보기 ({candidateTxs.filter((t) => t.category === '미분류').length})
-                    </button>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Notice Banner */}
-              {candidateTxs.filter((t) => t.category === '미분류').length > 0 && (
-                <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold">분류(태그)를 지금 바로 선택할 수 있습니다!</span>
-                      <p className="text-[11px] text-amber-800 mt-0.5">
-                        각 거래의 분류 드롭다운을 클릭하여 카테고리를 지정하세요. '동일 거래처 일괄 적용'이 켜져 있으면 같은 거래처는 한 번에 분류됩니다.
-                        원하시면 별 모양(⭐) 버튼으로 향후 업로드 시 자동 분류할 규칙으로 바로 저장할 수 있습니다.
-                      </p>
+              {/* Metric Boxes - Interactive Filters */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* 1. 신규 반영 대상 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter(activeFilter === 'new' ? 'all' : 'new')}
+                  className={`text-left rounded-xl p-4 transition-all cursor-pointer relative ${
+                    activeFilter === 'new'
+                      ? 'bg-emerald-100/90 border-2 border-emerald-500 shadow-sm ring-2 ring-emerald-400/30'
+                      : 'bg-emerald-50/70 border border-emerald-200/80 hover:bg-emerald-100/50 hover:border-emerald-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      <span>신규 반영 대상</span>
                     </div>
                   </div>
-                  {Object.keys(rulesToRegister).length > 0 && (
-                    <span className="shrink-0 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded-md">
-                      자동 규칙 {Object.keys(rulesToRegister).length}건 함께 등록
+                  <div className="mt-2 text-2xl font-bold text-emerald-950">{newTxs.length}건</div>
+                  <div className="text-[11px] text-emerald-700 mt-0.5">
+                    <span>자동 분류 규칙 적용 대상</span>
+                  </div>
+                </button>
+
+                {/* 2. 중복 의심 후보 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter(activeFilter === 'duplicate' ? 'all' : 'duplicate')}
+                  className={`text-left rounded-xl p-4 transition-all cursor-pointer relative ${
+                    activeFilter === 'duplicate'
+                      ? 'bg-amber-100/90 border-2 border-amber-500 shadow-sm ring-2 ring-amber-400/30'
+                      : 'bg-amber-50/70 border border-amber-200/80 hover:bg-amber-100/50 hover:border-amber-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                      <AlertCircle className="h-4 w-4 text-amber-600" />
+                      <span>중복 의심 후보</span>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-2xl font-bold text-amber-950">{duplicateCandidateTxs.length}건</div>
+                  <div className="text-[11px] text-amber-700 mt-0.5">
+                    <span>
+                      {duplicateCandidateTxs.length === 0
+                        ? '기존 동일 거래 없음'
+                        : `${excludedDuplicatesCount}건 제외됨`}
                     </span>
-                  )}
-                </div>
-              )}
+                  </div>
+                </button>
 
-              {/* Transactions Table / List */}
-              <div className="min-h-[280px] max-h-[480px] overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white shadow-2xs">
-                {candidateTxs
-                  .filter((tx) => (filterUnclassifiedOnly ? tx.category === '미분류' : true))
-                  .map((tx) => {
-                    const isUnclassified = tx.category === '미분류';
-                    const isRuleQueued = !!rulesToRegister[tx.counterparty];
+                {/* 3. 계좌 간 이체 후보 */}
+                <button
+                  type="button"
+                  onClick={() => setActiveFilter(activeFilter === 'transfer' ? 'all' : 'transfer')}
+                  className={`text-left rounded-xl p-4 transition-all cursor-pointer relative ${
+                    activeFilter === 'transfer'
+                      ? 'bg-indigo-100/90 border-2 border-indigo-500 shadow-sm ring-2 ring-indigo-400/30'
+                      : 'bg-indigo-50/70 border border-indigo-200/80 hover:bg-indigo-100/50 hover:border-indigo-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-indigo-800 flex items-center gap-1.5">
+                      <ArrowLeftRight className="h-4 w-4 text-indigo-600" />
+                      <span>계좌 간 이체 후보</span>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-2xl font-bold text-indigo-950">{transferCandidateTxs.length}건</div>
+                  <div className="text-[11px] text-indigo-700 mt-0.5">
+                    <span>지출/수입 통계 자동 제외</span>
+                  </div>
+                </button>
+              </div>
 
-                    return (
-                      <div
-                        key={tx.id}
-                        className={`p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
-                          isUnclassified ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50'
+              {/* Candidate List with In-place Category Classification */}
+              <div className="space-y-3">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-slate-900">
+                      가져올 거래 내역 ({filteredTxs.length}
+                      {filteredTxs.length !== candidateTxs.length ? ` / 전체 ${candidateTxs.length}` : ''}건)
+                    </span>
+                    {unclassifiedTxs.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => setActiveFilter(activeFilter === 'unclassified' ? 'all' : 'unclassified')}
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 transition ${
+                          activeFilter === 'unclassified'
+                            ? 'bg-amber-500 text-white shadow-xs'
+                            : 'bg-amber-100 border border-amber-300 text-amber-800 hover:bg-amber-200'
                         }`}
                       >
-                        {/* Left: Info */}
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className="text-slate-400 font-mono text-[11px] shrink-0">
-                            {tx.occurredAt.split(' ')[0]}
-                          </span>
-                          <div className="truncate">
-                            <span className="font-bold text-slate-900 mr-2">{tx.counterparty}</span>
-                            {tx.rawDescription && tx.rawDescription !== tx.counterparty && (
-                              <span className="text-slate-500 text-[11px] font-normal">
-                                ({tx.rawDescription})
+                        <AlertCircle className="h-3 w-3 text-amber-600" />
+                        미분류 {unclassifiedTxs.length}건 확인 필요
+                      </button>
+                    ) : (
+                      <span className="bg-emerald-100 border border-emerald-300 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                        전체 분류 완료
+                      </span>
+                    )}
+                    {excludedTxIds.size > 0 && (
+                      <span className="bg-slate-100 border border-slate-300 text-slate-600 text-[11px] font-bold px-2 py-0.5 rounded-full">
+                        총 {excludedTxIds.size}건 제외 설정됨
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Filter Toolbar & Batch Exclusion */}
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {/* Batch Exclusion Button for Duplicates */}
+                    {duplicateCandidateTxs.length > 0 && (
+                      <div>
+                        {!isAllDuplicatesExcluded ? (
+                          <button
+                            type="button"
+                            onClick={handleExcludeAllDuplicates}
+                            className="px-2.5 py-1 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg transition flex items-center gap-1 shadow-2xs"
+                          >
+                            <Ban className="h-3.5 w-3.5 text-amber-700" />
+                            <span>중복 의심 {duplicateCandidateTxs.length}건 일괄 제외</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleRestoreAllDuplicates}
+                            className="px-2.5 py-1 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg transition flex items-center gap-1 shadow-2xs"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5 text-slate-600" />
+                            <span>중복 의심 {duplicateCandidateTxs.length}건 다시 포함</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    <label className="text-[11px] text-slate-600 flex items-center gap-1.5 cursor-pointer select-none bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg">
+                      <input
+                        type="checkbox"
+                        checked={applyToSameCounterparty}
+                        onChange={(e) => setApplyToSameCounterparty(e.target.checked)}
+                        className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                      />
+                      <span className="font-medium">동일 거래처 일괄 적용</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Notice Banner */}
+                {unclassifiedTxs.length > 0 && (
+                  <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold">분류(태그)를 지금 바로 선택할 수 있습니다!</span>
+                        <p className="text-[11px] text-amber-800 mt-0.5">
+                          각 거래의 분류 드롭다운을 클릭하여 카테고리를 지정하세요. '동일 거래처 일괄 적용'이 켜져 있으면 같은 거래처는 한 번에 분류됩니다.
+                          원하시면 별 모양(⭐) 버튼으로 향후 업로드 시 자동 분류할 규칙으로 바로 저장할 수 있습니다.
+                        </p>
+                      </div>
+                    </div>
+                    {Object.keys(rulesToRegister).length > 0 && (
+                      <span className="shrink-0 bg-indigo-600 text-white text-[10px] font-bold px-2 py-1 rounded-md">
+                        자동 규칙 {Object.keys(rulesToRegister).length}건 함께 등록
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Transactions Table / List */}
+                <div className="min-h-[280px] max-h-[480px] overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white shadow-2xs">
+                  {filteredTxs.length === 0 ? (
+                    <div className="py-12 text-center text-slate-400 text-xs">
+                      해당 조건에 맞는 거래 내역이 없습니다.
+                    </div>
+                  ) : (
+                    filteredTxs.map((tx) => {
+                      const isUnclassified = tx.category === '미분류';
+                      const isRuleQueued = !!rulesToRegister[tx.counterparty];
+                      const isDuplicateSuspect = tx.tags.includes('중복의심');
+                      const isExcluded = excludedTxIds.has(tx.id);
+
+                      return (
+                        <div
+                          key={tx.id}
+                          className={`p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                            isExcluded
+                              ? 'bg-slate-100/70 opacity-60'
+                              : isDuplicateSuspect
+                              ? 'bg-amber-50/50 hover:bg-amber-50/80 border-l-4 border-amber-400'
+                              : isUnclassified
+                              ? 'bg-amber-50/30 hover:bg-amber-50/60'
+                              : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          {/* Left: Info */}
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-slate-400 font-mono text-[11px] shrink-0">
+                              {tx.occurredAt.split(' ')[0]}
+                            </span>
+                            <div className="truncate flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`font-bold mr-1 ${
+                                  isExcluded ? 'line-through text-slate-500' : 'text-slate-900'
+                                }`}
+                              >
+                                {tx.counterparty}
                               </span>
+                              {tx.rawDescription && tx.rawDescription !== tx.counterparty && (
+                                <span className="text-slate-500 text-[11px] font-normal">
+                                  ({tx.rawDescription})
+                                </span>
+                              )}
+                              {isDuplicateSuspect && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-bold bg-amber-100 border border-amber-300 text-amber-800 rounded">
+                                  <AlertCircle className="h-3 w-3 text-amber-600" />
+                                  중복 의심
+                                </span>
+                              )}
+                              {isExcluded && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold bg-slate-200 text-slate-600 rounded">
+                                  반영 제외됨
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Right: Category Selector & Amount & Exclude Action */}
+                          <div className="flex items-center gap-2.5 shrink-0">
+                            {!isExcluded ? (
+                              <>
+                                {/* In-place Modern Searchable Category Selector */}
+                                <CategorySelector
+                                  value={tx.category}
+                                  direction={tx.direction}
+                                  onChange={(newCategory) =>
+                                    handleCandidateCategoryChange(
+                                      tx.id,
+                                      newCategory,
+                                      tx.counterparty
+                                    )
+                                  }
+                                  align="right"
+                                  size="sm"
+                                />
+
+                                {/* Bookmark Rule Button */}
+                                {!isUnclassified && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleToggleRegisterRule(
+                                        tx.counterparty,
+                                        tx.category,
+                                        tx.direction,
+                                        tx.type
+                                      )
+                                    }
+                                    title={
+                                      isRuleQueued
+                                        ? '자동 분류 규칙 등록 대기 중 (클릭 시 취소)'
+                                        : `'${tx.counterparty}' 자동분류 규칙으로 등록`
+                                    }
+                                    className={`p-1.5 rounded-lg border text-xs transition flex items-center gap-1 ${
+                                      isRuleQueued
+                                        ? 'bg-indigo-50 border-indigo-300 text-indigo-700 font-bold shadow-2xs'
+                                        : 'bg-white border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-200'
+                                    }`}
+                                  >
+                                    <Sparkles className={`h-3.5 w-3.5 ${isRuleQueued ? 'text-indigo-600 fill-indigo-600' : ''}`} />
+                                    <span className="text-[10px] hidden md:inline">
+                                      {isRuleQueued ? '규칙등록' : '규칙저장'}
+                                    </span>
+                                  </button>
+                                )}
+
+                                {/* Transaction Amount */}
+                                <span
+                                  className={`font-bold text-right min-w-[75px] ${
+                                    tx.direction === 'in' ? 'text-emerald-600' : 'text-slate-900'
+                                  }`}
+                                >
+                                  {tx.direction === 'in' ? '+' : '-'}
+                                  {formatKRW(tx.amount)}
+                                </span>
+
+                                {/* Row Exclusion Button (중복 의심 후보에만 적용) */}
+                                {isDuplicateSuspect && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleExclude(tx.id)}
+                                    title="중복 의심 건 가계부 반영에서 제외"
+                                    className="px-2 py-1 text-xs font-semibold rounded-lg border transition flex items-center gap-1 bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                                    <span className="text-[11px]">제외</span>
+                                  </button>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-slate-400 font-mono text-xs line-through">
+                                  {tx.direction === 'in' ? '+' : '-'}
+                                  {formatKRW(tx.amount)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleExclude(tx.id)}
+                                  className="px-2.5 py-1 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition flex items-center gap-1"
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5" />
+                                  <span>다시 포함</span>
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
 
-                        {/* Right: Category Selector & Amount & Rule Register */}
-                        <div className="flex items-center gap-2.5 shrink-0">
-                          {/* In-place Modern Searchable Category Selector */}
-                          <CategorySelector
-                            value={tx.category}
-                            direction={tx.direction}
-                            onChange={(newCategory) =>
-                              handleCandidateCategoryChange(
-                                tx.id,
-                                newCategory,
-                                tx.counterparty
-                              )
-                            }
-                            align="right"
-                            size="sm"
-                          />
-
-                          {/* Bookmark Rule Button */}
-                          {!isUnclassified && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleToggleRegisterRule(
-                                  tx.counterparty,
-                                  tx.category,
-                                  tx.direction,
-                                  tx.type
-                                )
-                              }
-                              title={
-                                isRuleQueued
-                                  ? '자동 분류 규칙 등록 대기 중 (클릭 시 취소)'
-                                  : `'${tx.counterparty}' 자동분류 규칙으로 등록`
-                              }
-                              className={`p-1.5 rounded-lg border text-xs transition flex items-center gap-1 ${
-                                isRuleQueued
-                                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 font-bold shadow-2xs'
-                                  : 'bg-white border-slate-200 text-slate-400 hover:text-indigo-600 hover:border-indigo-200'
-                              }`}
-                            >
-                              <Sparkles className={`h-3.5 w-3.5 ${isRuleQueued ? 'text-indigo-600 fill-indigo-600' : ''}`} />
-                              <span className="text-[10px] hidden md:inline">
-                                {isRuleQueued ? '규칙등록' : '규칙저장'}
-                              </span>
-                            </button>
-                          )}
-
-                          {/* Transaction Amount */}
-                          <span
-                            className={`font-bold text-right min-w-[80px] ${
-                              tx.direction === 'in' ? 'text-emerald-600' : 'text-slate-900'
-                            }`}
-                          >
-                            {tx.direction === 'in' ? '+' : '-'}
-                            {formatKRW(tx.amount)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+              {/* Actions */}
+              <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                <button
+                  onClick={() => setStep(2)}
+                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  <ArrowLeft className="h-4 w-4" /> 이전 단계
+                </button>
+                <button
+                  onClick={handleConfirmImport}
+                  disabled={isProcessing || activeCandidateTxs.length === 0}
+                  className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-md disabled:opacity-50"
+                >
+                  {isProcessing ? (
+                    <span>가계부 반영 중...</span>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>
+                        최종 가계부에 반영하기 ({activeCandidateTxs.length}건)
+                        {excludedTxIds.size > 0 ? ` · 제외 ${excludedTxIds.size}건` : ''}
+                      </span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
-
-            {/* Actions */}
-            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-              <button
-                onClick={() => setStep(2)}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
-              >
-                <ArrowLeft className="h-4 w-4" /> 이전 단계
-              </button>
-              <button
-                onClick={handleConfirmImport}
-                disabled={isProcessing}
-                className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-md disabled:opacity-50"
-              >
-                {isProcessing ? (
-                  <span>가계부 반영 중...</span>
-                ) : (
-                  <>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>최종 가계부에 반영하기 ({candidateTxs.length}건)</span>
-                  </>
-                )}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Recent Import Batches & Undo Section (PRD F-02 되돌리기 지원) */}
       {recentBatches.length > 0 && (
@@ -909,6 +1232,105 @@ export const S2Upload: React.FC<S2UploadProps> = ({
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Password-protected Excel Modal */}
+      {isPasswordModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleUnlockWithPassword}
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <Lock className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-bold text-slate-900">비밀번호로 보호된 파일</h3>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">{file?.name || '엑셀 파일'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasswordModalOpen(false);
+                  setFilePassword('');
+                  setPasswordError(null);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1">
+              <p className="font-semibold">이 엑셀 파일은 암호로 보호되어 있습니다.</p>
+              <p className="text-[11px] text-amber-800/90 leading-relaxed">
+                은행/금융사에서 다운로드한 엑셀 파일은 대개 <strong>생년월일 6자리 (예: 920512)</strong> 또는 <strong>사업자등록번호 (10자리)</strong>로 암호화되어 있습니다.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-700">비밀번호 입력</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoFocus
+                  required
+                  placeholder="파일 비밀번호를 입력하세요"
+                  value={filePassword}
+                  onChange={(e) => {
+                    setFilePassword(e.target.value);
+                    if (passwordError) setPasswordError(null);
+                  }}
+                  className="w-full text-xs px-3 py-2.5 pr-10 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                  title={showPassword ? '비밀번호 숨기기' : '비밀번호 보기'}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {passwordError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2">
+                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                <span className="leading-tight">{passwordError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPasswordModalOpen(false);
+                  setFilePassword('');
+                  setPasswordError(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={isDecrypting}
+                className="px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-2xs cursor-pointer flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {isDecrypting ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                    <span>암호 해독 중...</span>
+                  </>
+                ) : (
+                  <span>암호 해제 후 열기</span>
+                )}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
