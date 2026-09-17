@@ -151,6 +151,10 @@ export const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
 
 const STORAGE_KEY_COL_ORDER = 's3_tx_column_order';
 const STORAGE_KEY_COL_WIDTHS = 's3_tx_column_widths';
+const STORAGE_KEY_DETAIL_WIDTH = 's3_tx_detail_panel_width';
+const DEFAULT_DETAIL_PANEL_WIDTH = 380;
+const MIN_DETAIL_PANEL_WIDTH = 260;
+const MAX_DETAIL_PANEL_WIDTH = 800;
 
 export const S3Transactions: React.FC<S3TransactionsProps> = ({
   transactions,
@@ -174,8 +178,9 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   // Selected for batch editing
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Active Transaction for Detail Panel
-  const [activeTxId, setActiveTxId] = useState<string | null>(transactions[0]?.id || null);
+  // Active Transaction for Detail Panel (기본: 패널 닫힘 상태 -> 테이블 전체 가로폭 100% 활용)
+  const [activeTxId, setActiveTxId] = useState<string | null>(null);
+  const detailPanelRef = useRef<HTMLDivElement | null>(null);
 
   // Split Modal State
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
@@ -326,6 +331,23 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
   const isResizingRef = useRef<boolean>(false);
   const [resizingColId, setResizingColId] = useState<string | null>(null);
 
+  // 상세 패널 너비 조절 상태 (localStorage 영속화)
+  const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_DETAIL_WIDTH);
+      if (saved) {
+        const parsed = Number(saved);
+        if (!isNaN(parsed) && parsed >= MIN_DETAIL_PANEL_WIDTH && parsed <= MAX_DETAIL_PANEL_WIDTH) {
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_DETAIL_PANEL_WIDTH;
+  });
+  const [isResizingDetail, setIsResizingDetail] = useState<boolean>(false);
+
   // 컬럼 너비 또는 순서가 기본값과 다른지 여부
   const isCustomColumnConfig = useMemo(() => {
     const isCustomOrder = columnOrder.some((colId, idx) => colId !== DEFAULT_COLUMNS[idx].id);
@@ -334,6 +356,9 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     );
     return isCustomOrder || isCustomWidth;
   }, [columnOrder, columnWidths]);
+
+  // 스플릿 뷰 활성화 여부 (거래 선택 시)
+  const isSplitOpen = Boolean(activeTxId && transactions.some((t) => t.id === activeTxId));
 
   // 테이블 전체 최소 너비 (체크박스 40px + 각 컬럼 최소/설정 폭 합계)
   const minTableWidth = useMemo(() => {
@@ -344,18 +369,50 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     return checkboxWidth + sum;
   }, [columnOrder, columnWidths]);
 
-  // 헤더와 바디 행이 100% 동일하게 공유하는 CSS Grid 템플릿
+  // 헤더와 바디 행이 100% 동일하게 공유하는 CSS Grid 템플릿 (각 컬럼의 설정된 px 너비 직접 반영)
   const gridTemplateColumns = useMemo(() => {
     const checkboxCol = '40px';
     const tracks = columnOrder.map((colId) => {
       const w = columnWidths[colId] ?? DEFAULT_COLUMN_WIDTHS[colId] ?? 100;
-      if (colId === 'description') {
-        return `minmax(${w}px, 1fr)`;
-      }
       return `${w}px`;
     });
     return `${checkboxCol} ${tracks.join(' ')}`;
   }, [columnOrder, columnWidths]);
+
+  // 거래 상세정보 패널 너비 드래그 조절 핸들러
+  const handleDetailResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizingDetail(true);
+    const startX = e.clientX;
+    const startWidth = detailPanelWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      // 우측 패널이므로 마우스가 왼쪽으로 갈수록(delta < 0) 패널 너비는 증가
+      const delta = startX - moveEvent.clientX;
+      const maxAllowed = Math.min(MAX_DETAIL_PANEL_WIDTH, window.innerWidth - 300);
+      const newWidth = Math.min(maxAllowed, Math.max(MIN_DETAIL_PANEL_WIDTH, Math.round(startWidth + delta)));
+      setDetailPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      setIsResizingDetail(false);
+      setDetailPanelWidth((latest) => {
+        try {
+          localStorage.setItem(STORAGE_KEY_DETAIL_WIDTH, String(latest));
+        } catch {
+          // ignore
+        }
+        return latest;
+      });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
 
   // 컬럼 리사이즈 마우스 드래그 핸들러
   const handleResizeStart = (e: React.MouseEvent, colId: string) => {
@@ -370,7 +427,17 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     const handleMouseMove = (moveEvent: MouseEvent) => {
       moveEvent.preventDefault();
       const delta = moveEvent.clientX - startX;
-      const minWidth = colId === 'receipt' || colId === 'status' ? 45 : colId === 'date' ? 70 : 75;
+      // 거래처/적요(description) 컬럼을 포함하여 최소 너비를 대폭 유연하게 허용 (60px)
+      const minWidth =
+        colId === 'receipt' || colId === 'status'
+          ? 36
+          : colId === 'date'
+          ? 55
+          : colId === 'description'
+          ? 60
+          : colId === 'amount'
+          ? 65
+          : 50;
       const newWidth = Math.max(minWidth, Math.round(initialWidth + delta));
       setColumnWidths((prev) => ({
         ...prev,
@@ -939,7 +1006,45 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
     }
   };
 
-  // Keyboard navigation and shortcuts (PRD requirement: ↑↓ navigation, T for fixed toggle, Enter for confirm)
+  // 상세 패널 외부 클릭(Outside Click) 시 닫기 리스너 (비차단형)
+  useEffect(() => {
+    if (!activeTxId) return;
+
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      // 1. 상세 패널 내부 클릭 시 닫지 않음
+      if (detailPanelRef.current && detailPanelRef.current.contains(target)) {
+        return;
+      }
+
+      // 2. 다른 거래 행 클릭 시: 스마트 전환 (해당 행의 onClick이 즉시 activeTxId를 변경)
+      if (target.closest('[id^="tx-row-"]')) {
+        return;
+      }
+
+      // 3. 모달/팝오버/카테고리 셀렉터/토스트/포털 내부 클릭 시 닫지 않음
+      if (
+        target.closest('[role="dialog"]') ||
+        target.closest('.category-selector-popup') ||
+        (tagPopoverRef.current && tagPopoverRef.current.contains(target)) ||
+        target.closest('.animate-toast-in')
+      ) {
+        return;
+      }
+
+      // 4. 테이블 빈 여백, 헤더 등 외부 영역 클릭 시 패널 슬라이드 아웃
+      setActiveTxId(null);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [activeTxId]);
+
+  // Keyboard navigation and shortcuts (PRD requirement: ↑↓ navigation, T for fixed toggle, Enter for confirm, ESC for close)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if user is currently typing in an input or textarea
@@ -954,12 +1059,30 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
       }
 
       // If modal dialogs are open, do not trigger background shortcuts
-      if (isSplitModalOpen || isPayslipModalOpen) {
+      if (isSplitModalOpen || isPayslipModalOpen || previewAttachment) {
         return;
       }
 
-      if (e.key === 'ArrowDown') {
+      if (e.key === 'Escape') {
+        if (tagPopoverTxId) {
+          setTagPopoverTxId(null);
+          return;
+        }
+        if (activeTxId) {
+          e.preventDefault();
+          setActiveTxId(null);
+          return;
+        }
+      } else if (e.key === 'ArrowDown') {
         e.preventDefault();
+        if (!activeTxId) {
+          if (sortedTransactions.length > 0) {
+            setActiveTxId(sortedTransactions[0].id);
+            const el = document.getElementById(`tx-row-${sortedTransactions[0].id}`);
+            el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+          return;
+        }
         const currentIdx = sortedTransactions.findIndex((t) => t.id === activeTxId);
         if (currentIdx < sortedTransactions.length - 1) {
           const nextTx = sortedTransactions[currentIdx + 1];
@@ -969,6 +1092,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        if (!activeTxId) return;
         const currentIdx = sortedTransactions.findIndex((t) => t.id === activeTxId);
         if (currentIdx > 0) {
           const prevTx = sortedTransactions[currentIdx - 1];
@@ -977,8 +1101,10 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
       } else if (e.key === 'Enter') {
-        e.preventDefault();
-        handleConfirmAndNext();
+        if (activeTx) {
+          e.preventDefault();
+          handleConfirmAndNext();
+        }
       } else if (e.key === 't' || e.key === 'T') {
         if (activeTx) {
           e.preventDefault();
@@ -992,7 +1118,7 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTxId, sortedTransactions, isSplitModalOpen, isPayslipModalOpen, activeTx, onUpdateTransaction]);
+  }, [activeTxId, sortedTransactions, isSplitModalOpen, isPayslipModalOpen, previewAttachment, tagPopoverTxId, activeTx, onUpdateTransaction]);
 
   // Reset payslip & transfer candidate states and sync memoDraft when active transaction changes
   useEffect(() => {
@@ -2141,10 +2267,14 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
         </div>
       </div>
 
-      {/* Main 3-Column / 2-Column Split: Table + Detail Panel */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Center: Transactions Table */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-white border-r border-slate-200">
+      {/* Main Container: Split View Layout (Table + User Resizable Detail Panel Side-by-Side) */}
+      <div className="flex flex-1 overflow-hidden relative w-full">
+        {/* Center: Transactions Table (스플릿 뷰 활성화 시 상세 패널 너비에 맞춰 유연하게 비례 반응) */}
+        <div
+          className={`flex flex-col overflow-hidden bg-white min-w-0 ${
+            isSplitOpen ? 'flex-1' : 'w-full flex-1'
+          }`}
+        >
           {/* Scrollable Container with scrollbar-gutter: stable */}
           <div
             className="flex-1 overflow-y-auto overflow-x-auto relative"
@@ -2218,19 +2348,31 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                         )}
                       </div>
 
-                      {/* Column Resize Handle (화면 상에서는 경계선 숨김 처리, 드래그 기능 유지) */}
+                      {/* Column Resize Handle */}
                       <div
-                        className={`absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize z-20 flex items-center justify-center ${
-                          isResizing ? 'bg-indigo-300/30' : ''
+                        className={`absolute -right-1.5 top-0 bottom-0 w-3 cursor-col-resize z-20 flex items-center justify-center select-none group/resizer hover:bg-indigo-500/20 rounded-xs transition-colors ${
+                          isResizing ? 'bg-indigo-500/30' : ''
                         }`}
                         onMouseDown={(e) => handleResizeStart(e, col.id)}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          const defaultW = DEFAULT_COLUMN_WIDTHS[col.id] ?? 100;
+                          setColumnWidths((prev) => {
+                            const updated = { ...prev, [col.id]: defaultW };
+                            try {
+                              localStorage.setItem(STORAGE_KEY_COL_WIDTHS, JSON.stringify(updated));
+                            } catch {
+                              // ignore
+                            }
+                            return updated;
+                          });
+                        }}
                         onClick={(e) => e.stopPropagation()}
-                        title="드래그하여 열 너비 조절"
+                        title={`${col.label} 열 너비 조절 (더블클릭 시 기본 너비로 복원)`}
                       >
-                        {/* 화면 상 경계선 숨김 */}
                         <div
-                          className={`w-[1px] transition-colors ${
-                            isResizing ? 'h-full bg-indigo-600' : 'bg-transparent'
+                          className={`w-[1.5px] h-3/5 rounded-full transition-colors ${
+                            isResizing ? 'bg-indigo-600 h-full' : 'bg-slate-300 group-hover/resizer:bg-indigo-500'
                           }`}
                         />
                       </div>
@@ -2396,44 +2538,36 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                                 <div
                                   key="tags"
                                   onClick={(e) => handleOpenTagPopover(e, tx.id)}
-                                  className="min-w-0 px-3 py-1 flex items-center justify-start text-left cursor-pointer hover:bg-indigo-50/40 rounded transition min-h-[32px] group/tagcell"
+                                  className="min-w-0 px-2.5 py-1 flex items-center justify-start text-left cursor-pointer hover:bg-indigo-50/40 rounded transition min-h-[32px] group/tagcell overflow-hidden"
                                   title="클릭하여 태그 관리 및 추가"
                                 >
                                   {tx.tags && tx.tags.length > 0 ? (
-                                    <div className="flex flex-wrap items-center gap-1 max-w-full">
-                                      {tx.tags.slice(0, 2).map((t, idx) => {
-                                        const isSecond = idx === 1;
-                                        const hasMore = tx.tags.length > 2;
-                                        return (
-                                          <div key={t} className="flex items-center gap-1 max-w-full">
-                                            <span
-                                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50/90 text-indigo-700 border border-indigo-200/60 rounded text-[10px] font-medium max-w-[110px] truncate"
-                                              title={`#${t}`}
-                                            >
-                                              <span className="truncate">#{t}</span>
-                                              <button
-                                                type="button"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  handleRemoveTagFromTx(tx.id, t);
-                                                }}
-                                                className="text-indigo-400 hover:text-rose-600 ml-0.5 transition shrink-0 cursor-pointer"
-                                                title="태그 삭제"
-                                              >
-                                                <X className="h-2.5 w-2.5" />
-                                              </button>
-                                            </span>
-                                            {isSecond && hasMore && (
-                                              <span
-                                                className="text-[9px] px-1 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-semibold shrink-0"
-                                                title={tx.tags.slice(2).map((rem) => `#${rem}`).join(', ')}
-                                              >
-                                                +{tx.tags.length - 2}
-                                              </span>
-                                            )}
-                                          </div>
-                                        );
-                                      })}
+                                    <div className="flex items-center gap-1 max-w-full overflow-hidden">
+                                      <span
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50/90 text-indigo-700 border border-indigo-200/60 rounded text-[10px] font-medium max-w-[85px] truncate"
+                                        title={`#${tx.tags[0]}`}
+                                      >
+                                        <span className="truncate">#{tx.tags[0]}</span>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveTagFromTx(tx.id, tx.tags[0]);
+                                          }}
+                                          className="text-indigo-400 hover:text-rose-600 ml-0.5 transition shrink-0 cursor-pointer"
+                                          title="태그 삭제"
+                                        >
+                                          <X className="h-2.5 w-2.5" />
+                                        </button>
+                                      </span>
+                                      {tx.tags.length > 1 && (
+                                        <span
+                                          className="text-[9px] px-1 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-semibold shrink-0"
+                                          title={tx.tags.slice(1).map((rem) => `#${rem}`).join(', ')}
+                                        >
+                                          +{tx.tags.length - 1}
+                                        </span>
+                                      )}
                                     </div>
                                   ) : (
                                     <span className="text-[11px] text-slate-300 group-hover/tagcell:text-indigo-500 transition select-none">
@@ -2444,13 +2578,14 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
                               );
                             case 'receipt':
                               return (
-                                <div key="receipt" className="min-w-0 px-2 py-3 flex items-center justify-center text-center">
+                                <div key="receipt" className="min-w-0 px-1 py-3 flex items-center justify-center text-center">
                                   {hasProofReceipt(tx) ? (
-                                    <span className="text-emerald-600 text-[11px] font-semibold flex items-center justify-center gap-0.5">
-                                      <Receipt className="h-3.5 w-3.5" /> 첨부
+                                    <span className="text-emerald-600 text-[11px] font-semibold flex items-center justify-center gap-0.5" title="증빙 첨부됨">
+                                      <Receipt className="h-3.5 w-3.5" />
+                                      <span className="hidden xl:inline text-[10px]">첨부</span>
                                     </span>
                                   ) : (
-                                    <span className="text-slate-300 text-[11px]">—</span>
+                                    <span className="text-slate-300 text-[11px] select-none">—</span>
                                   )}
                                 </div>
                               );
@@ -2593,30 +2728,83 @@ export const S3Transactions: React.FC<S3TransactionsProps> = ({
           )}
         </div>
 
-        {/* Right Detail Panel */}
-        <div className="w-80 border-l border-slate-200 bg-white flex flex-col shrink-0 relative overflow-hidden">
+        {/* Vertical Resize Divider Handle between Table and Detail Panel (Subtle 1-2px neutral line with generous hit area) */}
+        {isSplitOpen && activeTx && (
+          <div
+            className="relative w-2.5 shrink-0 cursor-col-resize z-20 flex items-center justify-center select-none group"
+            onMouseDown={handleDetailResizeStart}
+            onDoubleClick={() => {
+              setDetailPanelWidth(DEFAULT_DETAIL_PANEL_WIDTH);
+              try {
+                localStorage.setItem(STORAGE_KEY_DETAIL_WIDTH, String(DEFAULT_DETAIL_PANEL_WIDTH));
+              } catch {
+                // ignore
+              }
+            }}
+            title="좌우로 드래그하여 상세 정보 패널 너비 조절 (더블클릭 시 기본 크기로 복원)"
+          >
+            {/* Subtle 1px neutral border line (#E5E7EB / #D1D5DB) */}
+            <div
+              className={`w-[1px] h-full transition-colors ${
+                isResizingDetail
+                  ? 'bg-slate-400 w-[2px]'
+                  : 'bg-slate-200 group-hover:bg-slate-300'
+              }`}
+            />
+          </div>
+        )}
+
+        {/* Right Detail Panel - 사용자가 너비 조절 가능한 스플릿 뷰 패널 */}
+        <div
+          ref={detailPanelRef}
+          style={{
+            width: isSplitOpen && activeTx ? `${detailPanelWidth}px` : 0,
+            minWidth: isSplitOpen && activeTx ? `${MIN_DETAIL_PANEL_WIDTH}px` : 0,
+            maxWidth: '85vw',
+          }}
+          className={`bg-white border-l border-slate-200 shadow-xs flex flex-col shrink-0 ${
+            isResizingDetail ? '' : 'transition-[width,opacity] duration-200 ease-out'
+          } ${
+            isSplitOpen && activeTx
+              ? 'opacity-100 visible'
+              : 'opacity-0 overflow-hidden border-none pointer-events-none invisible'
+          }`}
+        >
           {activeTx ? (
             <div className="flex flex-col h-full">
               {/* Scrollable Content Body */}
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                {/* Detail Header */}
-                <div className="border-b border-slate-100 pb-3">
-                  <div className="text-[11px] font-semibold text-slate-400 flex items-center justify-between">
-                    <span>거래 상세 정보</span>
-                    <span className="font-mono">{activeTx.occurredAt}</span>
+                {/* Detail Header with X close button */}
+                <div className="border-b border-slate-100 pb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] font-semibold text-slate-400 flex items-center justify-between">
+                      <span>거래 상세 정보</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono">{activeTx.occurredAt}</span>
+                      </div>
+                    </div>
+                    <div className="mt-1 text-base font-bold text-slate-900 truncate">{activeTx.counterparty}</div>
+                    <div
+                      className={`mt-1 text-xl font-bold tracking-tight ${
+                        activeTx.type === 'transfer'
+                          ? 'text-slate-700'
+                          : activeTx.direction === 'in'
+                          ? 'text-emerald-600'
+                          : 'text-slate-900'
+                      }`}
+                    >
+                      {formatSignedKRW(activeTx.amount, activeTx.direction, hideAmounts)}
+                    </div>
                   </div>
-                  <div className="mt-1 text-base font-bold text-slate-900">{activeTx.counterparty}</div>
-                  <div
-                    className={`mt-1 text-xl font-bold tracking-tight ${
-                      activeTx.type === 'transfer'
-                        ? 'text-slate-700'
-                        : activeTx.direction === 'in'
-                        ? 'text-emerald-600'
-                        : 'text-slate-900'
-                    }`}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTxId(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition shrink-0 cursor-pointer"
+                    title="상세 패널 닫기 (ESC)"
+                    aria-label="상세 패널 닫기"
                   >
-                    {formatSignedKRW(activeTx.amount, activeTx.direction, hideAmounts)}
-                  </div>
+                    <X className="h-5 w-5" />
+                  </button>
                 </div>
 
                 {/* Account info */}
