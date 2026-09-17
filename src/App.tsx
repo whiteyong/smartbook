@@ -192,6 +192,35 @@ export default function App() {
     await deleteBudget(id);
   };
 
+  // Optimistic Rules Updates (Instant UI reactivity on priority reorder, toggle active, delete)
+  const handleUpdateRule = async (id: string, updates: Partial<ClassificationRule>) => {
+    setRules((prev) => {
+      const next = prev.map((r) =>
+        r.id === id ? { ...r, ...updates, updatedAt: new Date().toISOString() } : r
+      );
+      return [...next].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+    });
+    await updateRule(id, updates);
+  };
+
+  const handleReorderRules = async (reorderedRules: ClassificationRule[]) => {
+    setRules(reorderedRules);
+    for (const r of reorderedRules) {
+      await updateRule(r.id, { priority: r.priority });
+    }
+  };
+
+  const handleAddRule = async (newRule: Omit<ClassificationRule, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const created = await addRule(newRule);
+    setRules((prev) => [...prev, created].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)));
+    return created;
+  };
+
+  const handleDeleteRule = async (id: string) => {
+    setRules((prev) => prev.filter((r) => r.id !== id));
+    await deleteRule(id);
+  };
+
   // Rule creation promotion from transaction
   const handleCreateRuleFromTransaction = async (tx: Transaction, category: string) => {
     if (!tx.counterparty || tx.counterparty.trim() === '') {
@@ -226,7 +255,7 @@ export default function App() {
       appliedCount: 1,
     });
 
-    setRules((prev) => [...prev, newRule]);
+    setRules((prev) => [...prev, newRule].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)));
 
     // 3. Update current transaction and all other unconfirmed transactions with same counterparty
     setTransactions((prev) =>
@@ -377,10 +406,7 @@ export default function App() {
               onDeleteTransaction={handleDeleteTransaction}
               onCreateRuleFromTransaction={handleCreateRuleFromTransaction}
               rules={rules}
-              onDeleteRule={async (id) => {
-                await deleteRule(id);
-                setRules((prev) => prev.filter((rule) => rule.id !== id));
-              }}
+              onDeleteRule={handleDeleteRule}
             />
           )}
 
@@ -389,9 +415,10 @@ export default function App() {
               rules={rules}
               transactions={transactions}
               accounts={accounts}
-              onAddRule={addRule}
-              onUpdateRule={updateRule}
-              onDeleteRule={deleteRule}
+              onAddRule={handleAddRule}
+              onUpdateRule={handleUpdateRule}
+              onReorderRules={handleReorderRules}
+              onDeleteRule={handleDeleteRule}
               onBatchUpdateTransactions={batchUpdateTransactions}
             />
           )}

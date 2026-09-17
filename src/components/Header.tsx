@@ -38,7 +38,11 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenQuickAdd,
   onOpenUpload,
 }) => {
-  const hideTopControls = currentTab === 'accounts' || currentTab === 'budget';
+  const hideTopControls =
+    currentTab === 'accounts' ||
+    currentTab === 'budget' ||
+    currentTab === 'rules' ||
+    currentTab === 'upload';
 
   const handlePrevMonth = () => {
     const [year, month] = selectedMonth.split('-').map(Number);

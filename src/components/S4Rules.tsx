@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Sparkles,
   Plus,
@@ -11,6 +11,7 @@ import {
   Edit2,
   Layers,
   X,
+  AlertTriangle,
 } from 'lucide-react';
 import { ClassificationRule, Transaction, Account } from '../types';
 import { CATEGORY_TREE } from '../data/initialLedgerData';
@@ -23,6 +24,7 @@ interface S4RulesProps {
   accounts: Account[];
   onAddRule: (rule: Omit<ClassificationRule, 'id' | 'createdAt' | 'updatedAt'>) => Promise<any>;
   onUpdateRule: (id: string, updates: Partial<ClassificationRule>) => Promise<void>;
+  onReorderRules?: (reorderedRules: ClassificationRule[]) => Promise<void>;
   onDeleteRule: (id: string) => Promise<void>;
   onBatchUpdateTransactions: (updatedTxs: Transaction[]) => Promise<void>;
 }
@@ -33,13 +35,20 @@ export const S4Rules: React.FC<S4RulesProps> = ({
   accounts,
   onAddRule,
   onUpdateRule,
+  onReorderRules,
   onDeleteRule,
   onBatchUpdateTransactions,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleToDelete, setRuleToDelete] = useState<ClassificationRule | null>(null);
   const [isReapplying, setIsReapplying] = useState(false);
   const [reapplyMessage, setReapplyMessage] = useState<string | null>(null);
+
+  // Sorted rules by priority ascending
+  const sortedRules = useMemo(() => {
+    return [...rules].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+  }, [rules]);
 
   // Form state
   const [name, setName] = useState('');
@@ -97,7 +106,7 @@ export const S4Rules: React.FC<S4RulesProps> = ({
         },
       });
     } else {
-      const maxPriority = rules.reduce((max, r) => Math.max(max, r.priority), 0);
+      const maxPriority = sortedRules.reduce((max, r) => Math.max(max, r.priority ?? 0), 0);
       await onAddRule({
         name,
         priority: maxPriority + 1,
@@ -121,17 +130,29 @@ export const S4Rules: React.FC<S4RulesProps> = ({
 
   // Move priority up or down
   const handleMovePriority = async (ruleId: string, dir: 'up' | 'down') => {
-    const idx = rules.findIndex((r) => r.id === ruleId);
+    const currentList = [...sortedRules];
+    const idx = currentList.findIndex((r) => r.id === ruleId);
     if (idx === -1) return;
     if (dir === 'up' && idx === 0) return;
-    if (dir === 'down' && idx === rules.length - 1) return;
+    if (dir === 'down' && idx === currentList.length - 1) return;
 
     const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
-    const currentRule = rules[idx];
-    const targetRule = rules[targetIdx];
+    const temp = currentList[idx];
+    currentList[idx] = currentList[targetIdx];
+    currentList[targetIdx] = temp;
 
-    await onUpdateRule(currentRule.id, { priority: targetRule.priority });
-    await onUpdateRule(targetRule.id, { priority: currentRule.priority });
+    // Normalize priorities sequentially 1..N
+    const reordered = currentList.map((r, i) => ({
+      ...r,
+      priority: i + 1,
+    }));
+
+    if (onReorderRules) {
+      await onReorderRules(reordered);
+    } else {
+      await onUpdateRule(currentList[idx].id, { priority: idx + 1 });
+      await onUpdateRule(currentList[targetIdx].id, { priority: targetIdx + 1 });
+    }
   };
 
   // Past Transactions Re-Apply (과거 거래 재적용)
@@ -145,7 +166,7 @@ export const S4Rules: React.FC<S4RulesProps> = ({
         updatedList.push(tx);
         continue;
       }
-      const { modified, updatedTx } = applyRulesToTransaction(tx, rules);
+      const { modified, updatedTx } = applyRulesToTransaction(tx, sortedRules);
       if (modified) {
         modifiedCount++;
         updatedList.push(updatedTx);
@@ -210,10 +231,10 @@ export const S4Rules: React.FC<S4RulesProps> = ({
 
       {/* Rules List */}
       <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs divide-y divide-slate-100">
-        {rules.length === 0 ? (
+        {sortedRules.length === 0 ? (
           <div className="p-8 text-center text-xs text-slate-400">등록된 자동 분류 규칙이 없습니다.</div>
         ) : (
-          rules.map((rule, idx) => {
+          sortedRules.map((rule, idx) => {
             return (
               <div
                 key={rule.id}
@@ -234,7 +255,7 @@ export const S4Rules: React.FC<S4RulesProps> = ({
                     <span className="text-[11px] font-mono font-bold text-slate-400">#{idx + 1}</span>
                     <button
                       onClick={() => handleMovePriority(rule.id, 'down')}
-                      disabled={idx === rules.length - 1}
+                      disabled={idx === sortedRules.length - 1}
                       className="p-0.5 text-slate-400 hover:text-slate-700 disabled:opacity-20"
                     >
                       <ArrowDown className="h-3.5 w-3.5" />
@@ -285,12 +306,8 @@ export const S4Rules: React.FC<S4RulesProps> = ({
                     <Edit2 className="h-3.5 w-3.5" />
                   </button>
                   <button
-                    onClick={() => {
-                      if (confirm(`'${rule.name}' 규칙을 삭제하시겠습니까?`)) {
-                        onDeleteRule(rule.id);
-                      }
-                    }}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded"
+                    onClick={() => setRuleToDelete(rule)}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
                     title="규칙 삭제"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -432,6 +449,55 @@ export const S4Rules: React.FC<S4RulesProps> = ({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Delete Confirmation Alert Modal */}
+      {ruleToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">규칙 삭제 확인</h3>
+                <p className="text-xs text-slate-500 mt-0.5">삭제된 규칙은 복구할 수 없습니다.</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 space-y-1">
+              <div className="text-xs font-bold text-slate-800 break-all">{ruleToDelete.name}</div>
+              <div className="text-[11px] text-slate-500">
+                카테고리: <span className="font-semibold text-indigo-700">{ruleToDelete.result.category}</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              정말로 이 자동 분류 규칙을 삭제하시겠습니까?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setRuleToDelete(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const id = ruleToDelete.id;
+                  setRuleToDelete(null);
+                  await onDeleteRule(id);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition shadow-2xs cursor-pointer"
+              >
+                삭제하기
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
