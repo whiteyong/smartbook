@@ -36,37 +36,37 @@ const MENU_ITEMS: MenuItem[] = [
   {
     id: 'dashboard',
     label: '가계 대시보드',
-    subLabel: '현금흐름 · 수지 요약',
+    subLabel: '가계 상황 월간 요약',
     icon: LayoutDashboard,
   },
   {
     id: 'upload',
     label: '은행 엑셀 업로드',
-    subLabel: '열 매핑 · 중복/이체 감지',
+    subLabel: '간편한 거래내역 추가',
     icon: Upload,
   },
   {
     id: 'transactions',
     label: '거래 내역 관리',
-    subLabel: '상세 조회 · 거래 분할',
+    subLabel: '거래 상세 조회 · 분류',
     icon: Receipt,
   },
   {
     id: 'rules',
     label: '자동 분류 규칙',
-    subLabel: '우선순위 엔진 · 재적용',
+    subLabel: '규칙 맞춤 설정 · 자동 적용',
     icon: Sliders,
   },
   {
     id: 'budget',
-    label: '봉투 분리형 예산',
-    subLabel: '통장별 예산 상한 통제',
+    label: '예산 현황',
+    subLabel: '목표 예산 · 지출 관리',
     icon: Wallet,
   },
   {
     id: 'accounts',
     label: '계좌 및 잔액 관리',
-    subLabel: '수기 등록 · 1원 대조',
+    subLabel: '계좌 등록 · 관리',
     icon: Building2,
   },
 ];
@@ -96,13 +96,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Wallet className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
-                가정용 가계부
-                <span className="text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-1.5 py-0.2 rounded-md">
-                  PC 우선
-                </span>
+              <h1 className="text-sm font-bold text-white tracking-tight">
+                슬기로운 가계생활
               </h1>
-              <p className="text-[11px] text-slate-400 mt-0.5">스크래핑 없이 엑셀로 종결</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">계좌 연동 없이 엑셀 파일로 깔끔하게</p>
             </div>
           </div>
         </div>
@@ -126,9 +123,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="mt-1.5 text-lg font-bold text-white tracking-tight">
             {formatKRW(totalAssets, hideGnbTotalAssets)}
           </div>
-          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center justify-between">
+          <div className="text-[10px] text-slate-400 mt-0.5">
             <span>{accounts.length}개 통장 합산</span>
-            <span className="text-emerald-400 font-medium">1원 단위 무결성</span>
           </div>
         </div>
 

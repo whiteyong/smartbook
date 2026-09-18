@@ -12,7 +12,7 @@ import { Account, LedgerTab } from '../types';
 interface HeaderProps {
   currentTab?: LedgerTab;
   title: string;
-  description: string;
+  description?: string;
   selectedMonth: string; // YYYY-MM
   onMonthChange: (month: string) => void;
   accounts: Account[];
@@ -59,13 +59,17 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-16 border-b border-slate-200 bg-white px-6 flex items-center justify-between sticky top-0 z-20 shadow-2xs">
-      {/* Title & Description */}
-      <div>
+    <header className="min-h-16 border-b border-slate-200 bg-white px-6 py-2.5 flex items-center justify-between sticky top-0 z-20 shadow-2xs">
+      {/* Title */}
+      <div className="py-0.5">
         <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
           {title}
         </h2>
-        <p className="text-xs text-slate-500 hidden sm:block">{description}</p>
+        {description ? (
+          <p className="text-xs text-slate-500 mt-1 whitespace-pre-line leading-relaxed hidden sm:block">
+            {description}
+          </p>
+        ) : null}
       </div>
 
       {/* Center Month Selector & Account Filter (Hidden in Accounts & Budget Tabs) */}

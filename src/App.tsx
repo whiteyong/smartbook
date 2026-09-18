@@ -299,30 +299,25 @@ export default function App() {
   };
 
   // Titles for Header
-  const tabMeta: Record<string, { title: string; description: string }> = {
+  const tabMeta: Record<string, { title: string; description?: string }> = {
     dashboard: {
-      title: '가계 대시보드 (S1)',
-      description: '이달의 수입, 지출, 수지 현황 및 통장별 봉투 예산 소진율',
+      title: '가계 대시보드',
     },
     upload: {
-      title: '은행 엑셀 업로드 (S2)',
-      description: '계좌 선택, 자동 열 매핑, 중복 거래 배제 및 계좌 간 이체 자동 감지',
+      title: '은행 엑셀 업로드',
     },
     transactions: {
-      title: '거래 내역 조회 및 편집 (S3)',
-      description: '조건별 검색, 일괄 카테고리 지정, 1:N 거래 분할(Split) 및 이체 쌍 관리',
+      title: '거래 내역 관리',
     },
     rules: {
-      title: '자동 분류 규칙 엔진 (S4)',
-      description: '우선순위 순 키워드 조건 매칭 및 과거 거래 일괄 재적용',
+      title: '자동 분류 규칙',
+      description: '매달 반복되는 분류 작업을 자동화해 보세요.\n규칙은 위에서 아래 순서로 적용되며, 사용자가 직접 수정한 분류는 변경되지 않습니다.',
     },
     budget: {
-      title: '통장 분리형 봉투 예산 (S5)',
-      description: '통장 = 봉투 물리적 지출 상한 관리 및 월 경과일 대비 지출 페이스',
+      title: '예산 현황',
     },
     accounts: {
-      title: '통장 계좌 및 잔액 관리 (S6)',
-      description: '초기 잔액 기준 실시간 잔액 검증 및 1원 단위 무결성 보장',
+      title: '계좌 및 잔액 관리',
     },
   };
 
@@ -355,7 +350,7 @@ export default function App() {
         {/* Top Header */}
         <Header
           currentTab={currentTab}
-          title={tabMeta[currentTab]?.title || '가정용 가계부'}
+          title={tabMeta[currentTab]?.title || '슬기로운 가계생활'}
           description={tabMeta[currentTab]?.description || ''}
           selectedMonth={selectedMonth}
           onMonthChange={setSelectedMonth}

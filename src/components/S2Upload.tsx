@@ -54,6 +54,7 @@ export const S2Upload: React.FC<S2UploadProps> = ({
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedAccountId, setSelectedAccountId] = useState<string>(accounts[0]?.id || '');
   const [file, setFile] = useState<File | null>(null);
+  const [isSample, setIsSample] = useState<boolean>(false);
   const [parseResult, setParseResult] = useState<ExcelParseResult | null>(null);
   const [fieldMapping, setFieldMapping] = useState<ExcelParseResult['fieldMapping']>({
     occurredAt: '',
@@ -92,6 +93,7 @@ export const S2Upload: React.FC<S2UploadProps> = ({
 
   // File Handler
   const handleFile = async (f: File) => {
+    setIsSample(false);
     setUploadError(null);
     setPasswordError(null);
     setFile(f);
@@ -156,6 +158,7 @@ export const S2Upload: React.FC<S2UploadProps> = ({
 
   // Sample Bank File Handler
   const handleLoadSample = async (bank: '토스뱅크' | '국민은행' | '기업은행' | '신한은행', isEncrypted = false) => {
+    setIsSample(true);
     setUploadError(null);
     setPasswordError(null);
     const uint8 = await generateSampleBankExcel(bank, isEncrypted ? '920512' : undefined);
@@ -180,6 +183,17 @@ export const S2Upload: React.FC<S2UploadProps> = ({
         setUploadError(err?.message || '샘플 파일을 여는 중 오류가 발생했습니다.');
       }
     }
+  };
+
+  // Reset to Step 1
+  const handleResetToStep1 = () => {
+    setStep(1);
+    setFile(null);
+    setPendingBuffer(null);
+    setParseResult(null);
+    setCandidateTxs([]);
+    setExcludedTxIds(new Set());
+    setIsSample(false);
   };
 
   // Step 2 -> Step 3 Process
@@ -562,31 +576,16 @@ export const S2Upload: React.FC<S2UploadProps> = ({
                 <button
                   type="button"
                   onClick={() => handleLoadSample('토스뱅크')}
-                  className="px-3 py-1.5 text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-lg transition"
+                  className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition cursor-pointer"
                 >
                   토스뱅크 샘플
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleLoadSample('토스뱅크', true)}
-                  className="px-3 py-1.5 text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-lg transition flex items-center gap-1"
-                >
-                  <Lock className="h-3 w-3 text-amber-600" />
-                  토스뱅크 (암호 920512)
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleLoadSample('국민은행')}
-                  className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
+                  className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition cursor-pointer"
                 >
                   KB국민은행
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLoadSample('기업은행')}
-                  className="px-3 py-1.5 text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
-                >
-                  IBK기업은행
                 </button>
               </div>
             </div>
@@ -1176,27 +1175,38 @@ export const S2Upload: React.FC<S2UploadProps> = ({
               <div className="flex items-center justify-between pt-4 border-t border-slate-100">
                 <button
                   onClick={() => setStep(2)}
-                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
                 >
                   <ArrowLeft className="h-4 w-4" /> 이전 단계
                 </button>
-                <button
-                  onClick={handleConfirmImport}
-                  disabled={isProcessing || activeCandidateTxs.length === 0}
-                  className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-md disabled:opacity-50"
-                >
-                  {isProcessing ? (
-                    <span>가계부 반영 중...</span>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      <span>
-                        최종 가계부에 반영하기 ({activeCandidateTxs.length}건)
-                        {excludedTxIds.size > 0 ? ` · 제외 ${excludedTxIds.size}건` : ''}
-                      </span>
-                    </>
-                  )}
-                </button>
+                {isSample ? (
+                  <button
+                    type="button"
+                    onClick={handleResetToStep1}
+                    className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-md cursor-pointer"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span>계좌 선택 및 파일 업로드하기</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleConfirmImport}
+                    disabled={isProcessing || activeCandidateTxs.length === 0}
+                    className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-md disabled:opacity-50 cursor-pointer"
+                  >
+                    {isProcessing ? (
+                      <span>가계부 반영 중...</span>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>
+                          최종 가계부에 반영하기 ({activeCandidateTxs.length}건)
+                          {excludedTxIds.size > 0 ? ` · 제외 ${excludedTxIds.size}건` : ''}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>

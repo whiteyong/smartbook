@@ -250,47 +250,44 @@ export const S4Rules: React.FC<S4RulesProps> = ({
   };
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6 pb-20">
-      {/* Header Info */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-indigo-600" />
-            자동 분류 규칙 엔진 (우선순위 순 평가)
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            "두 번째 달부터는 자동"을 만드는 핵심입니다. 위에서 아래 순으로 평가하며, 수동으로 바꾼 분류는 건드리지 않습니다.
-          </p>
+    <div className="p-6 max-w-5xl mx-auto space-y-4 pb-20">
+      {/* Toast Message */}
+      {reapplyMessage && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between animate-in fade-in">
+          <span>{reapplyMessage}</span>
+          <button onClick={() => setReapplyMessage(null)} className="cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Action Buttons above Rules Box */}
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <div className="text-xs font-bold text-slate-700 flex items-center gap-2">
+          <span>등록된 규칙</span>
+          <span className="px-2 py-0.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-full text-[11px] font-semibold">
+            {sortedRules.length}개
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={handleReapplyRules}
             disabled={isReapplying}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-xl transition shadow-2xs disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 rounded-xl transition shadow-2xs disabled:opacity-50 cursor-pointer"
           >
             <Play className="h-3.5 w-3.5" />
             <span>{isReapplying ? '재적용 중...' : '과거 거래 재적용'}</span>
           </button>
           <button
             onClick={openCreateModal}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-2xs"
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition shadow-2xs cursor-pointer"
           >
             <Plus className="h-4 w-4" />
             <span>새 규칙 만들기</span>
           </button>
         </div>
       </div>
-
-      {/* Toast Message */}
-      {reapplyMessage && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between animate-in fade-in">
-          <span>{reapplyMessage}</span>
-          <button onClick={() => setReapplyMessage(null)}>
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
 
       {/* Rules List */}
       <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-2xs divide-y divide-slate-100">
