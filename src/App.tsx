@@ -421,6 +421,7 @@ export default function App() {
           {currentTab === 'budget' && (
             <S5Budget
               selectedMonth={selectedMonth}
+              onMonthChange={setSelectedMonth}
               accounts={accounts}
               budgets={budgets}
               transactions={effectiveTransactions}

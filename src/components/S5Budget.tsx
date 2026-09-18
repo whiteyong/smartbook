@@ -20,6 +20,7 @@ import { CategoryBudgetModal } from './CategoryBudgetModal';
 
 interface S5BudgetProps {
   selectedMonth: string;
+  onMonthChange?: (month: string) => void;
   accounts: Account[];
   budgets: Budget[];
   transactions: Transaction[];
@@ -237,32 +238,21 @@ export const S5Budget: React.FC<S5BudgetProps> = ({
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6 pb-20">
-      {/* Top Banner & Copy Action */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-6 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <Wallet className="h-5 w-5 text-indigo-600" />
-            {selectedMonth.replace('-', '년 ')}월 통장 분리형 봉투 예산
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            "예산은 숫자가 아니라 통장 잔액으로 지킨다." 이달 경과일({today}일/{daysInMonth}일, {monthPaceExpected}%) 대비 지출 속도를 추적합니다.
-          </p>
-        </div>
-
-        <button
-          onClick={handleCopyPrevMonth}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition shadow-2xs"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          <span>전월 예산 그대로 복사</span>
-        </button>
-      </div>
-
       {/* Row 1: 4 Account Envelope Cards */}
       <div>
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-          계좌별 예산 현황
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            계좌별 예산 현황
+          </h3>
+          <button
+            type="button"
+            onClick={handleCopyPrevMonth}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-white hover:bg-slate-50 border border-slate-200/90 text-slate-700 rounded-xl transition shadow-2xs cursor-pointer"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span>전월 예산 그대로 복사</span>
+          </button>
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {accountBudgetRows.map((row) => (
             <div
@@ -466,6 +456,28 @@ export const S5Budget: React.FC<S5BudgetProps> = ({
                     return false;
                   };
 
+                  const prevD = new Date(currYear, currMonthNum - 2, 1);
+                  const prevMonthStr = `${prevD.getFullYear()}-${String(prevD.getMonth() + 1).padStart(2, '0')}`;
+
+                  const prevBudget = budgets.find(
+                    (b) =>
+                      b.targetType === 'category' &&
+                      b.month === prevMonthStr &&
+                      (b.targetId === bg.targetId || b.targetName === bg.targetName)
+                  );
+
+                  const prevSpent = prevBudget
+                    ? transactions
+                        .filter((t) => {
+                          if (!t.occurredAt.startsWith(prevMonthStr) || t.type !== 'expense') return false;
+                          return isMatchingCategory(t.category, bg.targetName, bg.targetId);
+                        })
+                        .reduce((sum, t) => sum + t.amount, 0)
+                    : 0;
+
+                  const prevRemaining = prevBudget ? prevBudget.amount - prevSpent : 0;
+                  const rolloverAmount = bg.rollover && prevRemaining > 0 ? prevRemaining : 0;
+
                   const spent = monthExpenseTxs
                     .filter((t) => isMatchingCategory(t.category, bg.targetName, bg.targetId))
                     .reduce((sum, t) => sum + t.amount, 0);
@@ -475,7 +487,14 @@ export const S5Budget: React.FC<S5BudgetProps> = ({
                   return (
                     <tr key={bg.id} className="hover:bg-slate-50/70">
                       <td className="py-3 px-4 font-bold text-slate-900">{bg.targetName}</td>
-                      <td className="py-3 px-4 text-right font-semibold">{formatKRW(bg.amount, hideAmounts)}</td>
+                      <td className="py-3 px-4 text-right font-semibold">
+                        <span className="font-semibold text-slate-900 block">{formatKRW(bg.amount, hideAmounts)}</span>
+                        {bg.rollover && rolloverAmount > 0 && (
+                          <span className="text-[10px] text-indigo-600 font-semibold block mt-0.5">
+                            +{formatKRW(rolloverAmount, hideAmounts)} 이월
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-right font-bold text-slate-900">{formatKRW(spent, hideAmounts)}</td>
                       <td className="py-3 px-4 text-right font-bold">
                         <span

@@ -40,7 +40,6 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const hideTopControls =
     currentTab === 'accounts' ||
-    currentTab === 'budget' ||
     currentTab === 'rules' ||
     currentTab === 'upload';
 
@@ -72,31 +71,33 @@ export const Header: React.FC<HeaderProps> = ({
         ) : null}
       </div>
 
-      {/* Center Month Selector & Account Filter (Hidden in Accounts & Budget Tabs) */}
+      {/* Center Month Selector & Account Filter */}
       {!hideTopControls && (
-        <div className="flex items-center gap-3">
-          {/* Account Selector */}
-          <div className="relative">
-            <select
-              value={selectedAccountId}
-              onChange={(e) => onSelectAccountId(e.target.value)}
-              className="text-xs font-semibold bg-slate-50 border border-slate-300 text-slate-800 rounded-lg pl-3 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 appearance-none cursor-pointer"
-            >
-              <option value="all">전체 계좌 통합</option>
-              {accounts.map((acc) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.alias} ({acc.bankName})
-                </option>
-              ))}
-            </select>
-            <Wallet className="h-3.5 w-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+        <div className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 flex items-center gap-3">
+          {/* Account Selector (Only in Dashboard & Transactions) */}
+          {currentTab !== 'budget' && (
+            <div className="relative">
+              <select
+                value={selectedAccountId}
+                onChange={(e) => onSelectAccountId(e.target.value)}
+                className="text-xs font-semibold bg-slate-50 border border-slate-300 text-slate-800 rounded-lg pl-3 pr-8 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 appearance-none cursor-pointer"
+              >
+                <option value="all">전체 계좌 통합</option>
+                {accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.alias} ({acc.bankName})
+                  </option>
+                ))}
+              </select>
+              <Wallet className="h-3.5 w-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          )}
 
           {/* Month Selector */}
           <div className="flex items-center bg-slate-100/90 border border-slate-200/80 rounded-lg p-0.5">
             <button
               onClick={handlePrevMonth}
-              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
+              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition cursor-pointer"
               title="이전 달"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -107,7 +108,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <button
               onClick={handleNextMonth}
-              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition"
+              className="p-1 hover:bg-white hover:shadow-xs rounded-md text-slate-600 transition cursor-pointer"
               title="다음 달"
             >
               <ChevronRight className="h-4 w-4" />
@@ -116,13 +117,13 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       )}
 
-      {/* Actions (Hidden in Accounts & Budget Tabs) */}
-      {!hideTopControls && (
-        <div className="flex items-center gap-2">
+      {/* Actions (Hidden in Accounts, Budget, Rules & Upload Tabs) */}
+      {!hideTopControls && currentTab !== 'budget' && (
+        <div className="flex items-center gap-2 ml-auto">
           {needsAttentionCount > 0 && (
             <button
               onClick={onOpenNeedsAttention}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs cursor-pointer"
               title="확인 필요 거래 보기"
             >
               <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
@@ -132,7 +133,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             onClick={onOpenUpload}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs cursor-pointer"
           >
             <Upload className="h-3.5 w-3.5" />
             <span>엑셀 업로드</span>
@@ -140,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             onClick={onOpenQuickAdd}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs cursor-pointer"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>수기 등록</span>

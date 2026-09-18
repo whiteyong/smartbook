@@ -274,10 +274,36 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
     return false;
   };
 
+  const prevYearMonth = (() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const pd = new Date(y, m - 2, 1);
+    return `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+  })();
+
   const categoryBudgets = categoryBudgetList.map((bg) => {
     const spent = expenseTxs
       .filter((t) => isMatchingCategory(t.category, bg.targetName, bg.targetId))
       .reduce((sum, t) => sum + t.amount, 0);
+
+    // Calculate rollover from previous month if enabled
+    const prevBudget = budgets.find(
+      (b) =>
+        b.targetType === 'category' &&
+        b.month === prevYearMonth &&
+        (b.targetId === bg.targetId || b.targetName === bg.targetName)
+    );
+
+    const prevSpent = prevBudget
+      ? transactions
+          .filter((t) => {
+            if (!t.occurredAt.startsWith(prevYearMonth) || t.type !== 'expense') return false;
+            return isMatchingCategory(t.category, bg.targetName, bg.targetId);
+          })
+          .reduce((sum, t) => sum + t.amount, 0)
+      : 0;
+
+    const prevRemaining = prevBudget ? prevBudget.amount - prevSpent : 0;
+    const rolloverAmount = bg.rollover && prevRemaining > 0 ? prevRemaining : 0;
 
     const percent = bg.amount > 0 ? Math.round((spent / bg.amount) * 100) : 0;
     const remaining = bg.amount - spent;
@@ -295,6 +321,7 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
       percent,
       remaining,
       rollover: bg.rollover,
+      rolloverAmount,
       isOver,
       isPaceOver,
     };
@@ -948,6 +975,11 @@ export const S1Dashboard: React.FC<S1DashboardProps> = ({
                       <div className="text-right">
                         <span className="text-xs text-slate-400 block">월 배정 예산</span>
                         <span className="text-xs font-semibold text-slate-600">{formatKRW(catBg.budgetAmount, hideAmounts)}</span>
+                        {catBg.rollover && catBg.rolloverAmount > 0 && (
+                          <span className="text-[10px] text-indigo-600 font-semibold block mt-0.5">
+                            +{formatKRW(catBg.rolloverAmount, hideAmounts)} 이월
+                          </span>
+                        )}
                       </div>
                     </div>
 

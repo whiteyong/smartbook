@@ -132,10 +132,11 @@ export const CategoryBudgetModal: React.FC<CategoryBudgetModalProps> = ({
     return existingBudgets.some(
       (b) =>
         b.targetType === 'category' &&
+        b.month === selectedMonth &&
         b.targetName.toLowerCase() === currentCategoryName.toLowerCase() &&
         b.id !== editingBudget?.id
     );
-  }, [existingBudgets, currentCategoryName, editingBudget]);
+  }, [existingBudgets, selectedMonth, currentCategoryName, editingBudget]);
 
   const handleGroupSelect = (groupName: string) => {
     setSelectedGroup(groupName);
