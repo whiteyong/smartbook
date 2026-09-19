@@ -12,6 +12,7 @@ import { AuthUser } from '../types';
 interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
+  lastLoginProvider: 'kakao' | 'google' | 'naver' | null;
   loginWithKakao: () => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   loginWithNaver: () => Promise<void>;
@@ -21,6 +22,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const LS_AUTH_USER = 'hl_auth_user';
+const LS_LAST_LOGIN_PROVIDER = 'hl_last_login_provider';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(() => {
@@ -31,23 +33,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return null;
     }
   });
+
+  const [lastLoginProvider, setLastLoginProvider] = useState<'kakao' | 'google' | 'naver' | null>(() => {
+    try {
+      const savedProvider = localStorage.getItem(LS_LAST_LOGIN_PROVIDER);
+      if (savedProvider === 'kakao' || savedProvider === 'google' || savedProvider === 'naver') {
+        return savedProvider;
+      }
+      const savedUser = localStorage.getItem(LS_AUTH_USER);
+      if (savedUser) {
+        const parsed = JSON.parse(savedUser);
+        if (parsed?.provider === 'kakao' || parsed?.provider === 'google' || parsed?.provider === 'naver') {
+          return parsed.provider;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  });
+
   const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  const recordLoginProvider = (provider: 'kakao' | 'google' | 'naver') => {
+    setLastLoginProvider(provider);
+    try {
+      localStorage.setItem(LS_LAST_LOGIN_PROVIDER, provider);
+    } catch (e) {
+      console.warn('Failed to save last login provider', e);
+    }
+  };
 
   // Synchronize Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (fbUser: FirebaseUser | null) => {
       if (fbUser) {
         const isGoogle = fbUser.providerData.some((p) => p.providerId === 'google.com');
+        const providerName = isGoogle ? 'google' : 'kakao';
         const authUser: AuthUser = {
           uid: fbUser.uid,
           email: fbUser.email || 'user@example.com',
           displayName: fbUser.displayName || fbUser.email?.split('@')[0] || '사용자',
           photoURL: fbUser.photoURL || undefined,
-          provider: isGoogle ? 'google' : 'kakao',
+          provider: providerName,
           providerId: fbUser.providerData[0]?.providerId,
         };
         setUser(authUser);
         localStorage.setItem(LS_AUTH_USER, JSON.stringify(authUser));
+        recordLoginProvider(providerName);
       } else {
         const saved = localStorage.getItem(LS_AUTH_USER);
         if (saved) {
@@ -55,6 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const parsed = JSON.parse(saved);
             if (parsed && (parsed.provider === 'kakao' || parsed.provider === 'naver' || parsed.provider === 'google')) {
               setUser(parsed);
+              recordLoginProvider(parsed.provider);
             } else {
               setUser(null);
             }
@@ -100,6 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   };
                   setUser(kakaoUser);
                   localStorage.setItem(LS_AUTH_USER, JSON.stringify(kakaoUser));
+                  recordLoginProvider('kakao');
                   resolve();
                 },
                 fail: (error: any) => reject(error),
@@ -121,6 +156,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setUser(kakaoUser);
         localStorage.setItem(LS_AUTH_USER, JSON.stringify(kakaoUser));
+        recordLoginProvider('kakao');
       }
     } catch (err) {
       console.error('Kakao login error:', err);
@@ -148,6 +184,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       setUser(authUser);
       localStorage.setItem(LS_AUTH_USER, JSON.stringify(authUser));
+      recordLoginProvider('google');
     } catch (err: any) {
       console.error('Google login error:', err);
       // Handle unauthorized-domain (dev/preview Cloud Run domain not added to Firebase Console)
@@ -168,6 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setUser(authUser);
         localStorage.setItem(LS_AUTH_USER, JSON.stringify(authUser));
+        recordLoginProvider('google');
         return;
       }
       if (err?.code !== 'auth/popup-closed-by-user') {
@@ -187,6 +225,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const state = Math.random().toString(36).substring(2, 15);
         const redirectUri = encodeURIComponent(window.location.origin);
         const naverAuthUrl = `https://nid.naver.com/oauth2.0/authorize?response_type=token&client_id=${naverClientId}&redirect_uri=${redirectUri}&state=${state}`;
+        recordLoginProvider('naver');
         window.location.href = naverAuthUrl;
       } else {
         const id = 'n_' + Math.random().toString(36).substring(2, 9);
@@ -200,6 +239,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setUser(naverUser);
         localStorage.setItem(LS_AUTH_USER, JSON.stringify(naverUser));
+        recordLoginProvider('naver');
       }
     } catch (err) {
       console.error('Naver login error:', err);
@@ -225,6 +265,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       value={{
         user,
         isLoading,
+        lastLoginProvider,
         loginWithKakao,
         loginWithGoogle,
         loginWithNaver,

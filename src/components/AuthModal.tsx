@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export const AuthScreen: React.FC = () => {
-  const { loginWithKakao, loginWithGoogle, loginWithNaver, isLoading } = useAuth();
+  const { loginWithKakao, loginWithGoogle, loginWithNaver, isLoading, lastLoginProvider } = useAuth();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleKakaoLogin = async () => {
@@ -34,77 +33,109 @@ export const AuthScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-md w-full overflow-hidden flex flex-col animate-in fade-in duration-200">
-        {/* Header */}
-        <div className="px-8 pt-8 pb-6 text-center border-b border-slate-100">
-          <div className="h-12 w-12 rounded-2xl bg-indigo-600 flex items-center justify-center text-white mx-auto mb-3 shadow-md">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
-          <h1 className="text-xl font-bold text-slate-900">가계부 서비스 로그인</h1>
-          <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-            안전한 데이터 관리와 클라우드 동기화를 위해<br />
-            소셜 계정으로 로그인해 주세요.
-          </p>
+    <div className="min-h-screen relative overflow-hidden bg-[#eef5fc] flex items-center justify-center p-4 selection:bg-indigo-500 selection:text-white">
+      {/* Soft luminous pastel gradient layers as in reference image */}
+      <div
+        className="absolute inset-0 bg-gradient-to-tr from-[#dbeafe] via-[#eef4fe] to-[#e0e7ff] pointer-events-none"
+        aria-hidden="true"
+      />
+      {/* Soft Sky Blue / Pastel Cyan ambient glow on left */}
+      <div
+        className="absolute top-[-10%] left-[-10%] w-[650px] h-[650px] rounded-full bg-[#bfdbfe]/45 blur-[130px] pointer-events-none"
+        aria-hidden="true"
+      />
+      {/* Soft Periwinkle / Lavender ambient glow on right */}
+      <div
+        className="absolute bottom-[-10%] right-[-10%] w-[650px] h-[650px] rounded-full bg-[#ddd6fe]/45 blur-[140px] pointer-events-none"
+        aria-hidden="true"
+      />
+      {/* Center luminous soft white overlay */}
+      <div
+        className="absolute inset-0 bg-[radial-gradient(ellipse_70%_70%_at_50%_45%,rgba(255,255,255,0.75),rgba(238,245,252,0))] pointer-events-none"
+        aria-hidden="true"
+      />
+
+      {/* Login Card */}
+      <div className="relative z-10 bg-white rounded-3xl shadow-xl shadow-slate-300/40 border border-slate-100 max-w-md w-full overflow-hidden flex flex-col animate-in fade-in duration-200">
+        {/* Header with Login-selection logo image */}
+        <div className="px-8 pt-8 pb-3 text-center flex items-center justify-center">
+          <img
+            src="/Login-selection.png?v=3"
+            alt="슬기로운 가계생활"
+            className="h-20 max-w-[220px] w-auto object-contain select-none"
+            referrerPolicy="no-referrer"
+          />
         </div>
 
-        {/* Body - Ordered strictly by User Priority: Kakao > Google > Naver */}
-        <div className="p-8 space-y-3">
+        {/* Body - Ordered strictly by User Priority: Kakao > Naver > Google */}
+        <div className="px-8 pt-4 pb-8 space-y-3">
           {errorMsg && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium">
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-medium">
               {errorMsg}
             </div>
           )}
 
-          {/* 1. Kakao Login (우선순위 1) */}
+          {/* 1. Kakao Login */}
           <button
             onClick={handleKakaoLogin}
             disabled={isLoading}
-            className="w-full h-12 px-4 rounded-xl flex items-center justify-center gap-3 font-bold text-sm transition duration-150 cursor-pointer shadow-xs active:scale-[0.99] disabled:opacity-60 bg-[#FEE500] text-[#191919] hover:bg-[#FADA0A]"
+            className="w-full h-14 px-4 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 rounded-2xl flex items-center justify-between transition-all duration-150 cursor-pointer shadow-xs active:scale-[0.99] disabled:opacity-60 group text-left"
           >
-            <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 3C6.5 3 2 6.6 2 11c0 2.8 1.9 5.3 4.8 6.6l-1.2 4.4c-.1.4.3.7.6.5l5.2-3.4c.2 0 .4.1.6.1 5.5 0 10-3.6 10-8s-4.5-8-10-8z" />
-            </svg>
-            <span>카카오 로그인</span>
+            <div className="flex items-center gap-3.5">
+              <div className="w-9 h-9 rounded-xl bg-[#FEE500] flex items-center justify-center text-black font-black text-base shrink-0 shadow-xs">
+                K
+              </div>
+              <span className="text-[15px] font-bold text-slate-900 group-hover:text-black">
+                카카오
+              </span>
+            </div>
+            {lastLoginProvider === 'kakao' && (
+              <span className="text-xs text-slate-400 font-medium">
+                최근
+              </span>
+            )}
           </button>
 
-          {/* 2. Google Login (우선순위 2) */}
-          <button
-            onClick={handleGoogleLogin}
-            disabled={isLoading}
-            className="w-full h-12 px-4 rounded-xl flex items-center justify-center gap-3 font-bold text-sm transition duration-150 cursor-pointer border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 shadow-xs active:scale-[0.99] disabled:opacity-60"
-          >
-            <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3h3.88c2.27-2.09 3.66-5.17 3.66-9.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.1C3.26 21.4 7.34 24 12 24z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.28 14.32a7.18 7.18 0 0 1 0-4.64v-3.1H1.25a11.96 11.96 0 0 0 0 10.84l4.03-3.1z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.34 0 3.26 2.6 1.25 6.58l4.03 3.1c.95-2.83 3.6-4.93 6.72-4.93z"
-              />
-            </svg>
-            <span>Google 로그인</span>
-          </button>
-
-          {/* 3. Naver Login (우선순위 3) */}
+          {/* 2. Naver Login */}
           <button
             onClick={handleNaverLogin}
             disabled={isLoading}
-            className="w-full h-12 px-4 rounded-xl flex items-center justify-center gap-3 font-bold text-sm transition duration-150 cursor-pointer shadow-xs active:scale-[0.99] disabled:opacity-60 bg-[#03C75A] text-white hover:bg-[#02b350]"
+            className="w-full h-14 px-4 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 rounded-2xl flex items-center justify-between transition-all duration-150 cursor-pointer shadow-xs active:scale-[0.99] disabled:opacity-60 group text-left"
           >
-            <svg className="h-4 w-4 shrink-0 fill-white" viewBox="0 0 24 24">
-              <path d="M16.273 12.845L7.376 0H0v24h7.727V11.155L16.624 24H24V0h-7.727v12.845z" />
-            </svg>
-            <span>네이버 로그인</span>
+            <div className="flex items-center gap-3.5">
+              <div className="w-9 h-9 rounded-xl bg-[#03C75A] flex items-center justify-center text-white font-black text-base shrink-0 shadow-xs">
+                N
+              </div>
+              <span className="text-[15px] font-bold text-slate-900 group-hover:text-black">
+                네이버
+              </span>
+            </div>
+            {lastLoginProvider === 'naver' && (
+              <span className="text-xs text-slate-400 font-medium">
+                최근
+              </span>
+            )}
+          </button>
+
+          {/* 3. Google Login */}
+          <button
+            onClick={handleGoogleLogin}
+            disabled={isLoading}
+            className="w-full h-14 px-4 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 rounded-2xl flex items-center justify-between transition-all duration-150 cursor-pointer shadow-xs active:scale-[0.99] disabled:opacity-60 group text-left"
+          >
+            <div className="flex items-center gap-3.5">
+              <div className="w-9 h-9 rounded-xl bg-[#f2f4f7] border border-slate-200/80 flex items-center justify-center text-[#4285F4] font-black text-base shrink-0 shadow-xs">
+                G
+              </div>
+              <span className="text-[15px] font-bold text-slate-900 group-hover:text-black">
+                Google
+              </span>
+            </div>
+            {lastLoginProvider === 'google' && (
+              <span className="text-xs text-slate-400 font-medium">
+                최근
+              </span>
+            )}
           </button>
         </div>
 
