@@ -8,6 +8,8 @@ import { S4Rules } from './components/S4Rules';
 import { S5Budget } from './components/S5Budget';
 import { S6Accounts } from './components/S6Accounts';
 import { QuickAddModal } from './components/QuickAddModal';
+import { AuthScreen } from './components/AuthModal';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import {
   Account,
   Transaction,
@@ -35,7 +37,8 @@ import {
   batchUpdateTransactions,
 } from './services/ledgerService';
 
-export default function App() {
+function LedgerApp() {
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [currentTab, setCurrentTab] = useState<
     'dashboard' | 'upload' | 'transactions' | 'rules' | 'budget' | 'accounts'
   >('dashboard');
@@ -321,6 +324,20 @@ export default function App() {
     },
   };
 
+  if (isAuthLoading) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+        <span className="mt-3 text-xs font-semibold">사용자 인증 정보를 확인하는 중입니다...</span>
+      </div>
+    );
+  }
+
+  // 로그인되지 않은 경우 서비스 진입을 차단하고 소셜 로그인 화면을 표시
+  if (!user) {
+    return <AuthScreen />;
+  }
+
   if (isLoading && accounts.length === 0) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 text-slate-600">
@@ -473,5 +490,13 @@ export default function App() {
         onAddTransaction={addTransaction}
       />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <LedgerApp />
+    </AuthProvider>
   );
 }

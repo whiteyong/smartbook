@@ -169,3 +169,14 @@ export interface HouseholdInfo {
   ownerName: string;
   hideAmounts: boolean; // 금액 마스킹 모드
 }
+
+export type AuthProviderType = 'kakao' | 'google' | 'naver';
+
+export interface AuthUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  provider: AuthProviderType;
+  providerId?: string;
+}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   LayoutDashboard,
   Upload,
@@ -9,10 +9,14 @@ import {
   Shield,
   Eye,
   EyeOff,
-  UserCheck,
+  LogOut,
+  Mail,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { Account } from '../types';
 import { formatKRW } from '../utils/formatters';
+import { useAuth } from '../context/AuthContext';
 
 export type LedgerTab = 'dashboard' | 'upload' | 'transactions' | 'rules' | 'budget' | 'accounts';
 
@@ -77,14 +81,74 @@ export const Sidebar: React.FC<SidebarProps> = ({
   accounts,
   needsAttentionCount,
 }) => {
+  const { user, logout } = useAuth();
   // GNB 보유 자산 합계 전용 금액 숨기기 상태
-  const [hideGnbTotalAssets, setHideGnbTotalAssets] = React.useState<boolean>(false);
+  const [hideGnbTotalAssets, setHideGnbTotalAssets] = useState<boolean>(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState<boolean>(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Compute total liquid assets from accounts
   const totalAssets = accounts.reduce(
     (sum, acc) => sum + (acc.currentBalance ?? acc.initialBalance ?? 0),
     0
   );
+
+  const getProviderText = () => {
+    if (!user) return '게스트 모드';
+    switch (user.provider) {
+      case 'kakao':
+        return '카카오 계정 연동';
+      case 'google':
+        return 'Google 계정 연동';
+      case 'naver':
+        return '네이버 계정 연동';
+      default:
+        return '게스트 모드';
+    }
+  };
+
+  const getProviderBadge = () => {
+    if (!user) return null;
+    switch (user.provider) {
+      case 'kakao':
+        return (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#FEE500] text-[#191919]">
+            카카오
+          </span>
+        );
+      case 'google':
+        return (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+            Google
+          </span>
+        );
+      case 'naver':
+        return (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#03C75A] text-white">
+            네이버
+          </span>
+        );
+      default:
+        return (
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-700 text-slate-300">
+            게스트
+          </span>
+        );
+    }
+  };
+
+  const emailInitial = (user?.email || user?.displayName || 'U').charAt(0).toUpperCase();
 
   return (
     <aside className="w-64 bg-slate-900 text-slate-200 flex flex-col justify-between border-r border-slate-800 shrink-0 h-screen sticky top-0 select-none">
@@ -113,7 +177,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
             <button
               onClick={() => setHideGnbTotalAssets((prev) => !prev)}
-              className="p-1 hover:text-white rounded text-slate-400 transition"
+              className="p-1 hover:text-white rounded text-slate-400 transition cursor-pointer"
               title={hideGnbTotalAssets ? '보유 자산 금액 보이기' : '보유 자산 금액 숨기기'}
               aria-label={hideGnbTotalAssets ? '보유 자산 금액 보이기' : '보유 자산 금액 숨기기'}
             >
@@ -138,7 +202,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => onTabChange(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all group cursor-pointer ${
                   isActive
                     ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-900/40'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -181,23 +245,82 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </nav>
       </div>
 
-      {/* User & Security Footer */}
-      <div className="p-3.5 border-t border-slate-800 bg-slate-950/40">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="h-7 w-7 rounded-full bg-slate-700 flex items-center justify-center text-slate-300 text-xs font-bold">
-              <UserCheck className="h-3.5 w-3.5 text-indigo-400" />
+      {/* User & Security Footer (Clickable with Popover Menu) */}
+      <div className="relative p-3.5 border-t border-slate-800 bg-slate-950/50" ref={userMenuRef}>
+        {/* User Info & Logout Popover */}
+        {isUserMenuOpen && (
+          <div
+            id="gnb-user-dropdown-popover"
+            className="absolute bottom-full left-3 right-3 mb-2 bg-slate-800 rounded-xl shadow-2xl border border-slate-700/80 p-3.5 z-50 animate-in fade-in slide-in-from-bottom-2 duration-150"
+          >
+            {/* Provider Badge Header */}
+            <div className="flex items-center justify-between pb-2.5 border-b border-slate-700/70">
+              <span className="text-[11px] font-medium text-slate-400">로그인 계정</span>
+              <div>{getProviderBadge()}</div>
             </div>
-            <div className="text-left">
-              <div className="text-xs font-bold text-slate-300">가계 관리자</div>
-              <div className="text-[10px] text-slate-500">로컬 암호화 · 금융 보안</div>
+
+            {/* Logged in Email Info */}
+            <div className="py-2.5 border-b border-slate-700/70 flex items-center gap-2 min-w-0">
+              <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <div
+                id="gnb-user-email-display"
+                className="text-xs text-slate-200 font-normal truncate select-all"
+                title={user?.email || ''}
+              >
+                {user?.email || '이메일 정보 없음'}
+              </div>
+            </div>
+
+            {/* Logout Action Button */}
+            <div className="pt-2">
+              <button
+                id="gnb-logout-button"
+                onClick={async () => {
+                  setIsUserMenuOpen(false);
+                  await logout();
+                }}
+                className="w-full text-left px-3 py-2 text-xs font-semibold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+              >
+                <LogOut className="h-3.5 w-3.5 text-rose-400" />
+                <span>로그아웃</span>
+              </button>
             </div>
           </div>
-          <span
-            className="h-2 w-2 rounded-full bg-emerald-400 shadow-xs shadow-emerald-400/50"
-            title="데이터 안전 보관 중"
-          ></span>
-        </div>
+        )}
+
+        {/* Clickable User Row Button in GNB */}
+        <button
+          id="gnb-user-profile-button"
+          type="button"
+          onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+          className={`w-full flex items-center justify-between p-1.5 -m-1.5 rounded-xl transition text-left cursor-pointer ${
+            isUserMenuOpen
+              ? 'bg-slate-800 ring-1 ring-slate-700'
+              : 'hover:bg-slate-800/80'
+          }`}
+          title={user?.email || '계정 정보 및 로그아웃'}
+          aria-expanded={isUserMenuOpen}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="h-7 w-7 rounded-full bg-indigo-600 border border-indigo-400/30 text-white flex items-center justify-center text-xs font-bold shrink-0 shadow-xs">
+              {emailInitial}
+            </div>
+            <div className="text-left min-w-0">
+              <div className="text-xs font-semibold text-slate-200 truncate" title={user?.email || ''}>
+                {user?.email || '로그인 계정'}
+              </div>
+              <div className="text-[10px] text-slate-400 truncate">{getProviderText()}</div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0 pl-1 text-slate-400">
+            {isUserMenuOpen ? (
+              <ChevronDown className="h-4 w-4 text-slate-300" />
+            ) : (
+              <ChevronUp className="h-4 w-4 text-slate-400" />
+            )}
+          </div>
+        </button>
       </div>
     </aside>
   );

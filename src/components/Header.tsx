@@ -117,37 +117,40 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       )}
 
-      {/* Actions (Hidden in Accounts, Budget, Rules & Upload Tabs) */}
-      {!hideTopControls && currentTab !== 'budget' && (
-        <div className="flex items-center gap-2 ml-auto">
-          {needsAttentionCount > 0 && (
+      {/* Right Side Actions */}
+      <div className="flex items-center gap-2 ml-auto">
+        {!hideTopControls && currentTab !== 'budget' && (
+          <>
+            {needsAttentionCount > 0 && (
+              <button
+                onClick={onOpenNeedsAttention}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs cursor-pointer"
+                title="확인 필요 거래 보기"
+              >
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                <span>확인 필요 {needsAttentionCount}건</span>
+              </button>
+            )}
+
             <button
-              onClick={onOpenNeedsAttention}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition shadow-2xs cursor-pointer"
-              title="확인 필요 거래 보기"
+              onClick={onOpenUpload}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs cursor-pointer"
             >
-              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-              <span>확인 필요 {needsAttentionCount}건</span>
+              <Upload className="h-3.5 w-3.5" />
+              <span>엑셀 업로드</span>
             </button>
-          )}
 
-          <button
-            onClick={onOpenUpload}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition shadow-2xs cursor-pointer"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            <span>엑셀 업로드</span>
-          </button>
-
-          <button
-            onClick={onOpenQuickAdd}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs cursor-pointer"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>수기 등록</span>
-          </button>
-        </div>
-      )}
+            <button
+              onClick={onOpenQuickAdd}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition shadow-2xs cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>수기 등록</span>
+            </button>
+          </>
+        )}
+      </div>
     </header>
   );
 };
+
